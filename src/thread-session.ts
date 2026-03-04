@@ -52,6 +52,23 @@ export class ThreadSession {
     this.lastActivity = new Date();
   }
 
+  /**
+   * Dispose the persistent event subscriber.
+   * Set during construction, cleaned up in dispose().
+   */
+  private _persistentUnsub: (() => void) | null = null;
+  /**
+   * Current streaming state for the active agent turn.
+   * Managed by the persistent subscriber via agent_start / agent_end events.
+   */
+  private _activeStreamState: import("./streaming-updater.js").StreamingState | null = null;
+  /**
+   * Promise that resolves when the current agent turn finishes.
+   * Used by prompt() to wait for the full turn (including extension-triggered follow-ups).
+   */
+  private _turnCompletePromise: Promise<void> | null = null;
+  private _turnCompleteResolve: (() => void) | null = null;
+
   static async create(params: ThreadSessionCreateParams): Promise<ThreadSession> {
     // Store sessions in pi's native directory structure so `pi /resume` finds them.
     // Encodes cwd the same way pi does: ~/.pi/agent/sessions/--<encoded-cwd>--/
@@ -108,7 +125,7 @@ export class ThreadSession {
 
     const updater = new StreamingUpdater(params.client, params.config.streamThrottleMs);
 
-    return new ThreadSession(
+    const ts = new ThreadSession(
       params.threadTs,
       params.channelId,
       params.cwd,
@@ -117,6 +134,8 @@ export class ThreadSession {
       resourceLoader,
       updater,
     );
+    ts._setupPersistentSubscriber();
+    return ts;
   }
 
   enqueue(task: () => Promise<void>): void {
@@ -138,15 +157,44 @@ export class ThreadSession {
     this._processing = false;
   }
 
-  async prompt(text: string): Promise<void> {
-    // Rewrite !command → /command for pi extension commands & prompt templates.
-    // Bot-level commands (help, model, etc.) are intercepted before reaching here,
-    // so only pi commands (pdd, ralph, review, etc.) arrive at this point.
-    const piText = text.replace(/^!/, "/");
+  /**
+   * Set up a persistent event subscriber that handles all agent turns,
+   * including those triggered asynchronously by extensions (e.g., ralph loops).
+   */
+  private _setupPersistentSubscriber(): void {
+    this._persistentUnsub = this._agentSession.subscribe((event) => {
+      if (event.type === "agent_start") {
+        // A new agent turn is starting — create streaming state
+        this._updater.begin(this.channelId, this.threadTs).then((state) => {
+          this._activeStreamState = state;
+        }).catch((err) => {
+          console.error(`[ThreadSession ${this.threadTs}] Failed to begin streaming:`, err);
+        });
+        return;
+      }
 
-    const state = await this._updater.begin(this.channelId, this.threadTs);
+      if (event.type === "agent_end") {
+        // Agent turn finished — finalize the stream and resolve the turn promise
+        const state = this._activeStreamState;
+        this._activeStreamState = null;
+        if (state) {
+          this._updater.finalize(state).catch((err) => {
+            console.error(`[ThreadSession ${this.threadTs}] Failed to finalize streaming:`, err);
+          });
+        }
+        // Resolve the turn-complete promise so prompt() can return
+        if (this._turnCompleteResolve) {
+          this._turnCompleteResolve();
+          this._turnCompleteResolve = null;
+          this._turnCompletePromise = null;
+        }
+        return;
+      }
 
-    const unsub = this._agentSession.subscribe((event) => {
+      // Delegate streaming events to the active state
+      const state = this._activeStreamState;
+      if (!state) return;
+
       if (
         event.type === "message_update" &&
         event.assistantMessageEvent.type === "text_delta"
@@ -158,22 +206,80 @@ export class ThreadSession {
         this._updater.appendToolEnd(state, event.toolName, event.isError);
       }
     });
+  }
+
+  async prompt(text: string): Promise<void> {
+    // Rewrite !command → /command for pi extension commands & prompt templates.
+    // Bot-level commands (help, model, etc.) are intercepted before reaching here,
+    // so only pi commands (pdd, ralph, review, etc.) arrive at this point.
+    const piText = text.replace(/^!/, "/");
+
+    // Create a turn-complete promise that will be resolved by the persistent subscriber
+    // when agent_end fires. This ensures we wait for the full agent turn, including
+    // turns triggered asynchronously by extensions (e.g., ralph loops via sendUserMessage).
+    this._turnCompletePromise = new Promise<void>((resolve) => {
+      this._turnCompleteResolve = resolve;
+    });
 
     try {
       await this._agentSession.prompt(piText);
-      await this._updater.finalize(state);
+      // For extension commands that are "handled" immediately (like /ralph),
+      // prompt() returns before the agent turn starts. Wait for the first turn to
+      // complete, but don't block forever if no turn was started (pure commands).
+      if (this._turnCompletePromise) {
+        await Promise.race([
+          this._turnCompletePromise,
+          new Promise<void>((resolve) => setTimeout(resolve, 500)),
+        ]);
+      }
+      // If the agent is still streaming (ralph loop started another turn),
+      // wait for it to finish so we don't dequeue the next task prematurely.
+      // The small delay accounts for the gap between agent_end and the next
+      // sendUserMessage() call from extensions like ralph.
+      while (true) {
+        if (!this._agentSession.isStreaming) {
+          // Give extensions a moment to trigger the next turn
+          await new Promise((r) => setTimeout(r, 200));
+          if (!this._agentSession.isStreaming) break;
+        }
+        await new Promise<void>((resolve) => {
+          this._turnCompletePromise = new Promise<void>((r) => {
+            this._turnCompleteResolve = r;
+          });
+          this._turnCompletePromise.then(resolve);
+        });
+      }
     } catch (err) {
-      await this._updater.error(state, err instanceof Error ? err : new Error(String(err)));
-    } finally {
-      unsub();
+      // If we have an active stream state, show the error there
+      const state = this._activeStreamState;
+      if (state) {
+        this._activeStreamState = null;
+        await this._updater.error(state, err instanceof Error ? err : new Error(String(err)));
+      }
+      // Clean up turn promise
+      if (this._turnCompleteResolve) {
+        this._turnCompleteResolve();
+        this._turnCompleteResolve = null;
+        this._turnCompletePromise = null;
+      }
     }
   }
 
   abort(): void {
     void this._agentSession.abort();
+    // Resolve any pending turn promise so prompt() unblocks
+    if (this._turnCompleteResolve) {
+      this._turnCompleteResolve();
+      this._turnCompleteResolve = null;
+      this._turnCompletePromise = null;
+    }
   }
 
   async dispose(): Promise<void> {
+    if (this._persistentUnsub) {
+      this._persistentUnsub();
+      this._persistentUnsub = null;
+    }
     this._agentSession.dispose();
   }
 

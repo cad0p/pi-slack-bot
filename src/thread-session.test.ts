@@ -93,11 +93,18 @@ describe("ThreadSession prompt event wiring", () => {
     const agentSession = makeMockAgentSession();
     (agentSession as any).subscribe = mock.fn((cb: any) => { handler = cb; return () => {}; });
     (agentSession as any).prompt = mock.fn(async () => {
+      // Simulate agent_start → tool event → agent_end
+      handler({ type: "agent_start" });
+      // Wait for begin() to resolve
+      await new Promise((r) => setTimeout(r, 10));
       handler({ type: "tool_execution_start", toolCallId: "tc1", toolName: "read_file", args: { path: "/foo.ts" } });
+      handler({ type: "agent_end", messages: [] });
     });
 
     const updater = makeMockUpdater();
     const { session } = makeSession(agentSession, updater);
+    // Manually set up the persistent subscriber (normally done by create())
+    (session as any)._setupPersistentSubscriber();
 
     await session.prompt("read /foo.ts");
 
@@ -112,11 +119,15 @@ describe("ThreadSession prompt event wiring", () => {
     const agentSession = makeMockAgentSession();
     (agentSession as any).subscribe = mock.fn((cb: any) => { handler = cb; return () => {}; });
     (agentSession as any).prompt = mock.fn(async () => {
+      handler({ type: "agent_start" });
+      await new Promise((r) => setTimeout(r, 10));
       handler({ type: "tool_execution_end", toolCallId: "tc1", toolName: "bash", result: {}, isError: true });
+      handler({ type: "agent_end", messages: [] });
     });
 
     const updater = makeMockUpdater();
     const { session } = makeSession(agentSession, updater);
+    (session as any)._setupPersistentSubscriber();
 
     await session.prompt("run ls");
 
@@ -131,16 +142,59 @@ describe("ThreadSession prompt event wiring", () => {
     const agentSession = makeMockAgentSession();
     (agentSession as any).subscribe = mock.fn((cb: any) => { handler = cb; return () => {}; });
     (agentSession as any).prompt = mock.fn(async () => {
+      handler({ type: "agent_start" });
+      await new Promise((r) => setTimeout(r, 10));
       handler({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "hello" } });
+      handler({ type: "agent_end", messages: [] });
     });
 
     const updater = makeMockUpdater();
     const { session } = makeSession(agentSession, updater);
+    (session as any)._setupPersistentSubscriber();
 
     await session.prompt("hi");
 
     assert.equal(updater.appendText.mock.callCount(), 1);
     const atArgs = updater.appendText.mock.calls[0].arguments as unknown as any[];
     assert.equal(atArgs[1], "hello");
+  });
+
+  it("handles extension-triggered follow-up turns (ralph loop pattern)", async () => {
+    let handler: (event: any) => void = () => {};
+    const agentSession = makeMockAgentSession();
+    let turnCount = 0;
+
+    (agentSession as any).subscribe = mock.fn((cb: any) => { handler = cb; return () => {}; });
+    (agentSession as any).prompt = mock.fn(async () => {
+      turnCount++;
+      // First call: extension command, triggers a follow-up turn async
+      if (turnCount === 1) {
+        // Simulate extension triggering sendUserMessage after a delay
+        setTimeout(async () => {
+          // This simulates the internal prompt() from sendUserMessage
+          handler({ type: "agent_start" });
+          await new Promise((r) => setTimeout(r, 10));
+          handler({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "turn1" } });
+          handler({ type: "agent_end", messages: [] });
+          // isStreaming goes false briefly, then extension fires another turn
+          (agentSession as any).isStreaming = false;
+        }, 50);
+        return; // Extension command was "handled"
+      }
+    });
+
+    const updater = makeMockUpdater();
+    const { session } = makeSession(agentSession, updater);
+    (session as any)._setupPersistentSubscriber();
+
+    await session.prompt("/ralph feature build X");
+
+    // Wait for the async follow-up turn
+    await new Promise((r) => setTimeout(r, 300));
+
+    // The persistent subscriber should have created streaming state and handled events
+    assert.ok(updater.begin.mock.callCount() >= 1, "begin should be called for follow-up turn");
+    assert.ok(updater.appendText.mock.callCount() >= 1, "appendText should be called for follow-up turn");
+    assert.ok(updater.finalize.mock.callCount() >= 1, "finalize should be called for follow-up turn");
   });
 });
