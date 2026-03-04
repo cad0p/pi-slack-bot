@@ -125,12 +125,12 @@ export class ThreadSession {
       notify: (message: string, type?: string) => {
         console.log(`[Extension notify ${type ?? "info"}] ${message}`);
         // Detect ralph-related notifications and post to Slack.
-        // When ralph background loop is active, forward all extension notifications.
-        const isRalphMsg = message.includes("Ralph loop") || message.includes("ralph loop");
-        if (isRalphMsg && (message.includes("ended:") || message.includes("complete"))) {
-          ts._ralphBackgroundActive = false;
-        }
-        if (isRalphMsg || ts._ralphBackgroundActive) {
+        const isRalphMsg = message.includes("Ralph loop") || message.includes("ralph loop")
+          || message.includes("Preset:") || message.includes("No active loop");
+        if (isRalphMsg) {
+          if (message.includes("ended:") || message.includes("complete") || message.includes("Task complete")) {
+            ts._ralphBackgroundActive = false;
+          }
           ts._postToThread(`🎩 ${message}`).catch((err) => {
             console.error(`[ThreadSession ${params.threadTs}] Failed to post ralph notification:`, err);
           });
