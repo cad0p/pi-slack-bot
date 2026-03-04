@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { markdownToMrkdwn, splitMrkdwn, formatToolStart, formatToolEnd, formatToolLog, formatToolArgs, type ToolCallRecord } from "./formatter.js";
+import { markdownToMrkdwn, splitMrkdwn, formatToolStart, formatToolEnd, formatToolLog, formatToolArgs, convertMarkdownTables, type ToolCallRecord } from "./formatter.js";
 
 describe("markdownToMrkdwn", () => {
   it("converts bold", () => {
@@ -41,6 +41,57 @@ describe("markdownToMrkdwn", () => {
     const r1 = markdownToMrkdwn(md, false);
     const r2 = markdownToMrkdwn(md, true);
     assert.equal(r1, r2);
+  });
+});
+
+describe("convertMarkdownTables", () => {
+  it("converts a standard markdown table to a code block", () => {
+    const md = "| Name | Age |\n|------|-----|\n| Alice | 30 |\n| Bob | 25 |";
+    const result = convertMarkdownTables(md);
+    assert.ok(result.includes("```"), "should wrap in code block");
+    assert.ok(result.includes("Alice"), "should contain data");
+    assert.ok(result.includes("Bob"), "should contain data");
+    assert.ok(result.includes("─"), "should contain separator line");
+    // Should NOT contain pipe characters
+    assert.ok(!result.includes("|"), "should remove pipe characters");
+  });
+
+  it("preserves tables inside code blocks", () => {
+    const md = "```\n| a | b |\n|---|---|\n| 1 | 2 |\n```";
+    const result = convertMarkdownTables(md);
+    assert.ok(result.includes("|"), "pipes inside code block should be preserved");
+  });
+
+  it("leaves non-table pipe lines unchanged", () => {
+    const md = "| just a line\n| another";
+    const result = convertMarkdownTables(md);
+    // No separator row → not a real table → pass through
+    assert.equal(result, md);
+  });
+
+  it("handles tables with surrounding text", () => {
+    const md = "Before\n\n| H1 | H2 |\n|---|---|\n| a | b |\n\nAfter";
+    const result = convertMarkdownTables(md);
+    assert.ok(result.startsWith("Before"), "text before preserved");
+    assert.ok(result.endsWith("After"), "text after preserved");
+    assert.ok(result.includes("```"), "table converted to code block");
+  });
+
+  it("aligns columns with padding", () => {
+    const md = "| Short | LongerHeader |\n|---|---|\n| x | y |";
+    const result = convertMarkdownTables(md);
+    // Header should be padded to match widths
+    const lines = result.split("\n");
+    const headerLine = lines.find((l) => l.includes("Short"));
+    assert.ok(headerLine, "should have header");
+    assert.ok(headerLine!.includes("LongerHeader"), "should have second header");
+  });
+
+  it("integrates with markdownToMrkdwn", () => {
+    const md = "# Review\n\n| Finding | Severity |\n|---|---|\n| Bug | High |\n| Typo | Low |";
+    const result = markdownToMrkdwn(md);
+    assert.ok(result.includes("```"), "table should be in code block");
+    assert.ok(!result.includes("---|"), "separator row should be removed");
   });
 });
 

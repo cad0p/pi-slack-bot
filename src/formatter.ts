@@ -11,7 +11,89 @@ export function markdownToMrkdwn(markdown: string, partial?: boolean): string {
     const fenceCount = (md.match(/```/g) ?? []).length;
     if (fenceCount % 2 !== 0) md += "\n```";
   }
+  md = convertMarkdownTables(md);
   return slackifyMarkdown(md);
+}
+
+/**
+ * Convert markdown tables to code blocks so they render with monospace
+ * alignment in Slack (which doesn't support tables in mrkdwn).
+ *
+ * Detects consecutive lines starting with `|` and wraps them in a
+ * fenced code block. Skips tables already inside code blocks.
+ */
+export function convertMarkdownTables(markdown: string): string {
+  const lines = markdown.split("\n");
+  const result: string[] = [];
+  let inCodeBlock = false;
+  let tableBuffer: string[] = [];
+
+  const flushTable = (): void => {
+    if (tableBuffer.length === 0) return;
+    // Only convert if it looks like a real table (has separator row)
+    const hasSeparator = tableBuffer.some((l) =>
+      /^\|[\s:|-]+\|$/.test(l.trim())
+    );
+    if (hasSeparator && tableBuffer.length >= 3) {
+      // Remove the separator row and reformat as aligned text in a code block
+      const dataRows = tableBuffer.filter(
+        (l) => !/^\|[\s:|-]+\|$/.test(l.trim())
+      );
+      const parsed = dataRows.map((row) =>
+        row
+          .split("|")
+          .slice(1, -1)
+          .map((cell) => cell.trim())
+      );
+      // Calculate column widths
+      const colCount = Math.max(...parsed.map((r) => r.length));
+      const widths: number[] = [];
+      for (let c = 0; c < colCount; c++) {
+        widths.push(Math.max(...parsed.map((r) => (r[c] ?? "").length)));
+      }
+      // Format rows with padding
+      const formatted = parsed.map((row) =>
+        row.map((cell, c) => cell.padEnd(widths[c] ?? 0)).join("  ")
+      );
+      // Add a separator after header
+      const sep = widths.map((w) => "─".repeat(w)).join("──");
+      result.push("```");
+      result.push(formatted[0]);
+      result.push(sep);
+      for (let i = 1; i < formatted.length; i++) {
+        result.push(formatted[i]);
+      }
+      result.push("```");
+    } else {
+      // Not a real table, pass through as-is
+      result.push(...tableBuffer);
+    }
+    tableBuffer = [];
+  };
+
+  for (const line of lines) {
+    if (line.trimStart().startsWith("```")) {
+      flushTable();
+      inCodeBlock = !inCodeBlock;
+      result.push(line);
+      continue;
+    }
+
+    if (inCodeBlock) {
+      result.push(line);
+      continue;
+    }
+
+    if (line.trimStart().startsWith("|")) {
+      tableBuffer.push(line);
+    } else {
+      flushTable();
+      result.push(line);
+    }
+  }
+
+  flushTable();
+  return result.join("\n");
 }
 
 /**
