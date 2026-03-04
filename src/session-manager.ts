@@ -25,6 +25,8 @@ export interface GetOrCreateParams {
   threadTs: string;
   channelId: string;
   cwd: string;
+  /** If set, resume from this existing session file instead of creating a new one. */
+  resumeSessionPath?: string;
 }
 
 type SessionFactory = (params: ThreadSessionCreateParams) => Promise<ThreadSession>;

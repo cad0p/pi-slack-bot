@@ -28,15 +28,6 @@ const MAX_DOWNLOAD_BYTES = 10 * 1024 * 1024;
 /** Max file size we'll upload to Slack (10 MB). */
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
-/** File extensions we'll show a text preview for. */
-const TEXT_PREVIEW_EXTS = new Set([
-  ".ts", ".tsx", ".js", ".jsx", ".json", ".md", ".txt", ".yaml", ".yml",
-  ".toml", ".py", ".rb", ".go", ".rs", ".java", ".c", ".cpp", ".h",
-  ".sh", ".bash", ".zsh", ".css", ".html", ".xml", ".sql", ".csv",
-  ".env", ".gitignore", ".dockerfile", ".tf", ".hcl", ".lua", ".vim",
-  ".conf", ".ini", ".cfg", ".log",
-]);
-
 /* ------------------------------------------------------------------ */
 /*  Inbound: Download files shared by the user in Slack                */
 /* ------------------------------------------------------------------ */
@@ -171,7 +162,13 @@ export function createShareFileTool(
       const ctx = getContext();
       const filePath = resolve(cwd, params.path);
 
-      // Validate the file exists and is within cwd
+      // Prevent path traversal outside the workspace
+      if (!filePath.startsWith(cwd + "/") && filePath !== cwd) {
+        return {
+          content: [{ type: "text", text: `Error: Path is outside the workspace: ${filePath}` }],
+        };
+      }
+
       if (!existsSync(filePath)) {
         return {
           content: [{ type: "text", text: `Error: File not found: ${filePath}` }],
@@ -268,11 +265,4 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-/**
- * Check if a file extension should get a text preview.
- */
-export function isTextPreviewable(filename: string): boolean {
-  return TEXT_PREVIEW_EXTS.has(extname(filename).toLowerCase());
 }

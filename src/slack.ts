@@ -132,9 +132,9 @@ export function createApp(config: Config, attachServer?: AttachServer): SlackApp
 
   app.event("message", async ({ event, client }) => {
     if (!("user" in event) || !("text" in event)) return;
-    // Allow file_share subtype through — user uploaded a file
+    // Allow file_share subtype through — user uploaded a file.
+    // bot_message is filtered out by the subtype check (it's not "file_share").
     if (event.subtype && event.subtype !== "file_share") return;
-    if ((event as any).subtype === "bot_message") return;
     if (event.user !== config.slackUserId) return;
 
     const channel = event.channel;
@@ -172,7 +172,14 @@ export function createApp(config: Config, attachServer?: AttachServer): SlackApp
 
     // Attached sessions — forward messages to the pi extension via WebSocket
     if (attachServer?.hasSession(threadTs)) {
-      attachServer.sendUserMessage(threadTs, text);
+      // Download any shared files into the attached session's cwd
+      const attachCwd = attachServer.getSessionCwd(threadTs);
+      if (slackFiles.length > 0 && attachCwd) {
+        const prompt = await enrichPromptWithFiles(slackFiles, text, attachCwd, config.slackBotToken);
+        attachServer.sendUserMessage(threadTs, prompt);
+      } else {
+        attachServer.sendUserMessage(threadTs, text);
+      }
       return;
     }
 

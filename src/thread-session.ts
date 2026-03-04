@@ -7,6 +7,7 @@ import type { Config, ThinkingLevel } from "./config.js";
 import { StreamingUpdater } from "./streaming-updater.js";
 import { createFilePickerTool, type FilePickerContext } from "./file-picker.js";
 import { createShareFileTool, type ShareFileContext } from "./file-sharing.js";
+import { encodeCwd } from "./session-path.js";
 
 export interface ThreadSessionCreateParams {
   threadTs: string;
@@ -15,6 +16,8 @@ export interface ThreadSessionCreateParams {
   config: Config;
   client: WebClient;
   sessionDir: string;
+  /** If set, resume from this existing session file instead of creating a new one. */
+  resumeSessionPath?: string;
 }
 
 export class ThreadSession {
@@ -52,11 +55,13 @@ export class ThreadSession {
   static async create(params: ThreadSessionCreateParams): Promise<ThreadSession> {
     // Store sessions in pi's native directory structure so `pi /resume` finds them.
     // Encodes cwd the same way pi does: ~/.pi/agent/sessions/--<encoded-cwd>--/
-    const cwdEncoded = `--${params.cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+    const cwdEncoded = encodeCwd(params.cwd);
     const nativeSessionDir = path.join(params.sessionDir, cwdEncoded);
     mkdirSync(nativeSessionDir, { recursive: true });
 
-    const sessionFilePath = path.join(nativeSessionDir, `${params.threadTs}.jsonl`);
+    // If resuming, use the existing session file; otherwise create a new one.
+    const sessionFilePath = params.resumeSessionPath
+      ?? path.join(nativeSessionDir, `${params.threadTs}.jsonl`);
     const piSessionManager = PiSessionManager.open(sessionFilePath, nativeSessionDir);
 
     // DefaultResourceLoader auto-discovers extensions and prompts from ~/.pi/agent/

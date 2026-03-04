@@ -7,7 +7,6 @@ import {
   downloadSlackFiles,
   formatInboundFileContext,
   createShareFileTool,
-  isTextPreviewable,
   INBOUND_DIR,
   type SlackFile,
   type DownloadedFile,
@@ -60,25 +59,6 @@ describe("formatInboundFileContext", () => {
 });
 
 /* ------------------------------------------------------------------ */
-/*  isTextPreviewable                                                  */
-/* ------------------------------------------------------------------ */
-
-describe("isTextPreviewable", () => {
-  it("returns true for known text extensions", () => {
-    assert.ok(isTextPreviewable("foo.ts"));
-    assert.ok(isTextPreviewable("bar.py"));
-    assert.ok(isTextPreviewable("config.json"));
-    assert.ok(isTextPreviewable("README.md"));
-  });
-
-  it("returns false for unknown/binary extensions", () => {
-    assert.ok(!isTextPreviewable("image.png"));
-    assert.ok(!isTextPreviewable("archive.zip"));
-    assert.ok(!isTextPreviewable("binary.exe"));
-  });
-});
-
-/* ------------------------------------------------------------------ */
 /*  downloadSlackFiles                                                 */
 /* ------------------------------------------------------------------ */
 
@@ -125,6 +105,16 @@ describe("createShareFileTool", () => {
     }));
     assert.equal(tool.name, "share_file");
     assert.ok(tool.description.includes("Upload"));
+  });
+
+  it("rejects paths outside the workspace", async () => {
+    const tool = createShareFileTool(TEST_DIR, () => ({
+      client: {} as any,
+      channelId: "C1",
+      threadTs: "t1",
+    }));
+    const result = await tool.execute("tc0", { path: "/etc/passwd" }, undefined, undefined, {} as any);
+    assert.ok((result.content[0] as any).text.includes("outside the workspace"));
   });
 
   it("returns error for non-existent file", async () => {

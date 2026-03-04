@@ -229,6 +229,10 @@ export class AttachServer {
     return this._sessions.has(threadTs);
   }
 
+  getSessionCwd(threadTs: string): string | undefined {
+    return this._sessions.get(threadTs)?.cwd;
+  }
+
   stop(): void {
     for (const session of this._sessions.values()) {
       session.ws.close();

@@ -7,11 +7,12 @@
  *
  * Uses pi's SessionManager.listAll() to discover sessions from ~/.pi/agent/sessions/.
  */
-import { basename, dirname } from "path";
+import { basename } from "path";
 import { SessionManager as PiSessionManager, type SessionInfo } from "@mariozechner/pi-coding-agent";
 import type { WebClient } from "@slack/web-api";
 import type { ThreadSession } from "./thread-session.js";
 import type { BotSessionManager } from "./session-manager.js";
+import { encodeCwd } from "./session-path.js";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -45,11 +46,6 @@ export function removePendingResume(messageTs: string): void {
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
-
-/** Decode the directory-encoded session folder name back to a path. */
-function decodeSessionDir(encoded: string): string {
-  return encoded.replace(/--/g, "/");
-}
 
 /** Truncate text to maxLen with ellipsis. */
 function truncate(text: string, maxLen: number): string {
@@ -332,25 +328,23 @@ export async function handleResumeSessionSelect(
       await pending.sessionManager.dispose(pending.threadTs);
     }
 
-    // Create a new ThreadSession that uses the selected session file
+    // Resume the selected session file — the agent will have full history
     const session = await pending.sessionManager.getOrCreate({
       threadTs: pending.threadTs,
       channelId: pending.channelId,
       cwd,
+      resumeSessionPath: sessionPath,
     });
 
     await pending.client.chat.postMessage({
       channel: pending.channelId,
       thread_ts: pending.threadTs,
       text: [
-        `🔗 *Resumed local session:* ${sessionName}`,
+        `🔗 *Resumed session:* ${sessionName}`,
         `📂 CWD: \`${cwd}\``,
-        `📁 Source: \`${sessionPath}\``,
-        `💬 ${selectedSession?.messageCount ?? "?"} messages`,
+        `💬 ${selectedSession?.messageCount ?? "?"} messages loaded`,
         "",
-        "_Note: This creates a new Slack session in the same CWD. The local session history is not imported — use `pi --session` in the TUI to continue that exact conversation._",
-        "",
-        `To continue this exact session in your terminal:\n\`\`\`pi --session ${sessionPath}\`\`\``,
+        `To also open in your terminal:\n\`\`\`pi --session ${sessionPath}\`\`\``,
       ].join("\n"),
     });
   } catch (err) {
@@ -365,11 +359,6 @@ export async function handleResumeSessionSelect(
 /* ------------------------------------------------------------------ */
 /*  to-tui helper                                                      */
 /* ------------------------------------------------------------------ */
-
-/** Encode cwd the same way pi does for session directory names. */
-function encodeCwd(cwd: string): string {
-  return `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
-}
 
 /**
  * Post the `pi --session <path>` command for the current Slack session.
