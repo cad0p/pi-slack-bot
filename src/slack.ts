@@ -107,7 +107,6 @@ export interface SlackApp {
   sessionManager: BotSessionManager;
   knownProjects: string[];
   pendingCwd: Map<string, PendingCwd>;
-  refreshTimer: ReturnType<typeof setInterval>;
   attachServer: AttachServer | null;
 }
 
@@ -120,15 +119,16 @@ export function createApp(config: Config, attachServer?: AttachServer): SlackApp
 
   const sessionManager = new BotSessionManager(config, app.client);
   // loadProjects re-reads ~/.pi-slack-bot/projects.json on every call,
-  // so edits take effect without restart. The timer keeps the cached list fresh.
+  // so edits take effect without restart.
   let projects = loadProjects(config.workspaceDirs);
   let knownProjects = projectPaths(projects);
   const pendingCwd = new Map<string, PendingCwd>();
 
-  const refreshTimer = setInterval(() => {
+  /** Refresh project list from disk. Called on every message so config changes take effect immediately. */
+  function refreshProjects(): void {
     projects = loadProjects(config.workspaceDirs);
     knownProjects = projectPaths(projects);
-  }, 5 * 60 * 1000);
+  }
 
   app.event("message", async ({ event, client }) => {
     if (!("user" in event) || !("text" in event)) return;
@@ -136,6 +136,9 @@ export function createApp(config: Config, attachServer?: AttachServer): SlackApp
     // bot_message is filtered out by the subtype check (it's not "file_share").
     if (event.subtype && event.subtype !== "file_share") return;
     if (event.user !== config.slackUserId) return;
+
+    // Refresh project list so config changes take effect immediately
+    refreshProjects();
 
     const channel = event.channel;
     const threadTs = ("thread_ts" in event ? event.thread_ts : undefined) ?? event.ts;
@@ -367,7 +370,6 @@ export function createApp(config: Config, attachServer?: AttachServer): SlackApp
     get knownProjects() { return knownProjects; },
     set knownProjects(v: string[]) { knownProjects = v; },
     pendingCwd,
-    refreshTimer,
     attachServer: attachServer ?? null,
   };
 }

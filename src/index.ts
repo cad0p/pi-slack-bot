@@ -36,7 +36,6 @@ console.log(`Bot running (${slackApp.knownProjects.length} projects discovered)`
 process.on("SIGINT", async () => {
   console.log("\nShutting down...");
   attachServer.stop();
-  clearInterval(slackApp.refreshTimer);
   await slackApp.sessionManager.disposeAll();
   await slackApp.app.stop();
   process.exit(0);
