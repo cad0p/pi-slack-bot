@@ -86,7 +86,8 @@ export async function postProjectSessionPicker(
   sessionManager: BotSessionManager,
 ): Promise<void> {
   // List all sessions to find unique project directories
-  const allSessions = await PiSessionManager.listAll();
+  const allSessions = (await PiSessionManager.listAll())
+    .filter((s) => !s.firstMessage?.startsWith("[Ralph Loop"));
 
   if (allSessions.length === 0) {
     await client.chat.postMessage({
