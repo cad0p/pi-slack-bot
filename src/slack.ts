@@ -1,10 +1,7 @@
 import { App } from "@slack/bolt";
-import type { WebClient } from "@slack/web-api";
-import { basename } from "path";
-import { homedir } from "os";
 import type { Config } from "./config.js";
 import { BotSessionManager, SessionLimitError } from "./session-manager.js";
-import { parseMessage, loadProjects, projectPaths, type Project } from "./parser.js";
+import { parseMessage, loadProjects, projectPaths } from "./parser.js";
 import { parseCommand, dispatchCommand } from "./commands.js";
 import { handleFileSelect, handleFileNav, handleFilePickCancel, getPendingPick } from "./file-picker.js";
 import {
@@ -21,6 +18,13 @@ import {
   formatInboundFileContext,
   type SlackFile,
 } from "./file-sharing.js";
+import {
+  postCwdPicker,
+  handleCwdSelect,
+  handleCwdNav,
+  handleCwdCancel,
+  type PendingCwdPick,
+} from "./cwd-picker.js";
 
 /**
  * If the message has attached files, download them into the cwd and
@@ -41,71 +45,10 @@ async function enrichPromptWithFiles(
   return text ? `${context}\n\n${text}` : context;
 }
 
-export interface PendingCwd {
-  threadTs: string;
-  channelId: string;
-  prompt: string;
-  /** Files the user shared with this message, pending download after cwd is selected. */
-  files: SlackFile[];
-}
-
-/** Slack limits actions blocks to 25 elements, and max 5 actions blocks per message. */
-const MAX_BUTTONS_PER_BLOCK = 25;
-
-async function postProjectPicker(
-  client: WebClient,
-  channel: string,
-  threadTs: string,
-  prompt: string,
-  projects: Project[],
-  pendingCwd: Map<string, PendingCwd>,
-  headerText: string,
-  files: SlackFile[] = [],
-): Promise<void> {
-  // Build buttons — projects + home fallback
-  const allChoices = [
-    ...projects.map((p) => ({ label: p.label, value: p.path })),
-    { label: "🏠 Home", value: homedir() },
-  ];
-
-  // Split into actions blocks of up to 25 buttons each
-  const blocks: Array<Record<string, unknown>> = [
-    {
-      type: "section",
-      text: { type: "mrkdwn", text: headerText },
-    },
-  ];
-
-  for (let i = 0; i < allChoices.length; i += MAX_BUTTONS_PER_BLOCK) {
-    const chunk = allChoices.slice(i, i + MAX_BUTTONS_PER_BLOCK);
-    blocks.push({
-      type: "actions",
-      elements: chunk.map((choice, j) => ({
-        type: "button",
-        text: { type: "plain_text", text: choice.label },
-        action_id: `select_cwd_${i + j}`,
-        value: choice.value,
-      })),
-    });
-  }
-
-  const result = await client.chat.postMessage({
-    channel,
-    thread_ts: threadTs,
-    text: headerText,
-    blocks: blocks as any,
-  });
-
-  if (result.ts) {
-    pendingCwd.set(result.ts, { threadTs, channelId: channel, prompt, files });
-  }
-}
-
 export interface SlackApp {
   app: App;
   sessionManager: BotSessionManager;
   knownProjects: string[];
-  pendingCwd: Map<string, PendingCwd>;
 }
 
 export function createApp(config: Config): SlackApp {
@@ -120,12 +63,35 @@ export function createApp(config: Config): SlackApp {
   // so edits take effect without restart.
   let projects = loadProjects(config.workspaceDirs);
   let knownProjects = projectPaths(projects);
-  const pendingCwd = new Map<string, PendingCwd>();
 
   /** Refresh project list from disk. Called on every message so config changes take effect immediately. */
   function refreshProjects(): void {
     projects = loadProjects(config.workspaceDirs);
     knownProjects = projectPaths(projects);
+  }
+
+  /**
+   * Callback for when the user selects a directory in the cwd picker.
+   * Creates a session with the selected cwd and enqueues the original prompt.
+   */
+  async function onCwdSelected(pick: PendingCwdPick, selectedDir: string): Promise<void> {
+    try {
+      const session = await sessionManager.getOrCreate({
+        threadTs: pick.threadTs,
+        channelId: pick.channelId,
+        cwd: selectedDir,
+      });
+      const prompt = await enrichPromptWithFiles(pick.files, pick.prompt, session.cwd, config.slackBotToken);
+      session.enqueue(() => session.prompt(prompt));
+    } catch (err) {
+      if (err instanceof SessionLimitError) {
+        await pick.client.chat.postMessage({
+          channel: pick.channelId,
+          thread_ts: pick.threadTs,
+          text: "⚠️ Too many active sessions. Try again later.",
+        });
+      }
+    }
   }
 
   app.event("message", async ({ event, client }) => {
@@ -187,7 +153,7 @@ export function createApp(config: Config): SlackApp {
         existing.enqueue(() => existing.prompt(prompt));
         return;
       }
-      // Thread reply but no session — fall through to create with homedir
+      // Thread reply but no session — fall through to create with cwd picker
     }
 
     const parsed = parseMessage(text, knownProjects);
@@ -203,14 +169,28 @@ export function createApp(config: Config): SlackApp {
         const prompt = await enrichPromptWithFiles(slackFiles, parsed.prompt, session.cwd, config.slackBotToken);
         session.enqueue(() => session.prompt(prompt));
       } else if (parsed.candidates.length > 0) {
-        // Fuzzy matches — show matching projects as buttons
+        // Fuzzy matches — show matching projects as quick-pick buttons in the directory browser
         const matched = projects.filter((p) => parsed.candidates.includes(p.path));
-        await postProjectPicker(client, channel, threadTs, parsed.prompt, matched, pendingCwd,
-          `Multiple projects match \`${parsed.cwdToken}\`. Pick one:`, slackFiles);
+        await postCwdPicker({
+          client,
+          channel,
+          threadTs,
+          prompt: parsed.prompt,
+          files: slackFiles,
+          projects: matched,
+          onSelect: onCwdSelected,
+        });
       } else {
-        // No cwd token or no match — show all projects as a picker
-        await postProjectPicker(client, channel, threadTs, text, projects, pendingCwd,
-          "📂 Pick a project directory:", slackFiles);
+        // No cwd token or no match — show directory browser starting from home
+        await postCwdPicker({
+          client,
+          channel,
+          threadTs,
+          prompt: text,
+          files: slackFiles,
+          projects,
+          onSelect: onCwdSelected,
+        });
       }
     } catch (err) {
       if (err instanceof SessionLimitError) {
@@ -225,45 +205,55 @@ export function createApp(config: Config): SlackApp {
     }
   });
 
-  app.action(/^select_cwd_/, async ({ action, body, ack, client }) => {
-    await ack();
+  /* ── CWD picker action handlers ──────────────────────────────────── */
 
+  // Select current directory as cwd
+  app.action("cwd_pick_select", async ({ action, body, ack }) => {
+    await ack();
     if (action.type !== "button" || !("value" in action)) return;
     if (body.type !== "block_actions") return;
     const messageTs = body.message?.ts;
     if (!messageTs) return;
+    await handleCwdSelect(messageTs, action.value!);
+  });
 
-    const pending = pendingCwd.get(messageTs);
-    if (!pending) return;
-    pendingCwd.delete(messageTs);
+  // Navigate into a subdirectory
+  app.action(/^cwd_pick_nav_/, async ({ action, body, ack }) => {
+    await ack();
+    if (action.type !== "button" || !("value" in action)) return;
+    if (body.type !== "block_actions") return;
+    const messageTs = body.message?.ts;
+    if (!messageTs) return;
+    await handleCwdNav(messageTs, action.value!);
+  });
 
-    const selectedCwd = action.value!;
+  // Navigate to parent directory
+  app.action("cwd_pick_parent", async ({ action, body, ack }) => {
+    await ack();
+    if (action.type !== "button" || !("value" in action)) return;
+    if (body.type !== "block_actions") return;
+    const messageTs = body.message?.ts;
+    if (!messageTs) return;
+    await handleCwdNav(messageTs, action.value!);
+  });
 
-    // Update button message to show selection
-    await client.chat.update({
-      channel: pending.channelId,
-      ts: messageTs,
-      text: `📂 Using \`${selectedCwd}\``,
-      blocks: [],
-    });
+  // Jump to a pinned project
+  app.action(/^cwd_pick_pin_/, async ({ action, body, ack }) => {
+    await ack();
+    if (action.type !== "button" || !("value" in action)) return;
+    if (body.type !== "block_actions") return;
+    const messageTs = body.message?.ts;
+    if (!messageTs) return;
+    await handleCwdNav(messageTs, action.value!);
+  });
 
-    try {
-      const session = await sessionManager.getOrCreate({
-        threadTs: pending.threadTs,
-        channelId: pending.channelId,
-        cwd: selectedCwd,
-      });
-      const prompt = await enrichPromptWithFiles(pending.files, pending.prompt, session.cwd, config.slackBotToken);
-      session.enqueue(() => session.prompt(prompt));
-    } catch (err) {
-      if (err instanceof SessionLimitError) {
-        await client.chat.postMessage({
-          channel: pending.channelId,
-          thread_ts: pending.threadTs,
-          text: "⚠️ Too many active sessions. Try again later.",
-        });
-      }
-    }
+  // Cancel the cwd picker
+  app.action("cwd_pick_cancel", async ({ action, body, ack }) => {
+    await ack();
+    if (body.type !== "block_actions") return;
+    const messageTs = body.message?.ts;
+    if (!messageTs) return;
+    await handleCwdCancel(messageTs);
   });
 
   /* ── File picker action handlers ─────────────────────────────────── */
@@ -354,6 +344,5 @@ export function createApp(config: Config): SlackApp {
     sessionManager,
     get knownProjects() { return knownProjects; },
     set knownProjects(v: string[]) { knownProjects = v; },
-    pendingCwd,
   };
 }

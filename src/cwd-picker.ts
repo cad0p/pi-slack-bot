@@ -1,0 +1,322 @@
+/**
+ * Interactive directory browser for picking a working directory in Slack.
+ *
+ * When a user sends a first message without a valid cwd path, we post
+ * Slack buttons showing directories starting from home. The user can
+ * navigate into subdirectories, jump to pinned projects, go up to parent,
+ * or select the current directory as the session cwd.
+ */
+import { readdirSync, statSync } from "fs";
+import { resolve, join, dirname } from "path";
+import { homedir } from "os";
+import type { WebClient } from "@slack/web-api";
+import type { Project } from "./parser.js";
+import type { SlackFile } from "./file-sharing.js";
+
+/* ------------------------------------------------------------------ */
+/*  Types                                                              */
+/* ------------------------------------------------------------------ */
+
+export interface PendingCwdPick {
+  threadTs: string;
+  channelId: string;
+  /** The user's original message text, sent as the prompt once a dir is selected. */
+  prompt: string;
+  /** Files the user shared with this message, pending download after cwd is selected. */
+  files: SlackFile[];
+  /** The message TS of the picker so we can update it on navigation / selection. */
+  pickerMessageTs: string;
+  /** Slack client for follow-up API calls. */
+  client: WebClient;
+  /** Current directory being displayed. */
+  currentDir: string;
+  /** Timer for auto-timeout. */
+  timer: ReturnType<typeof setTimeout>;
+  /** Pinned project shortcuts for quick-jump buttons. */
+  projects: Project[];
+  /** Callback invoked when a directory is selected. */
+  onSelect: (pick: PendingCwdPick, selectedDir: string) => void;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Registry — maps Slack message TS → pending pick                    */
+/* ------------------------------------------------------------------ */
+
+const pending = new Map<string, PendingCwdPick>();
+
+/** Look up a pending cwd pick by the picker message TS. */
+export function getPendingCwdPick(messageTs: string): PendingCwdPick | undefined {
+  return pending.get(messageTs);
+}
+
+/** Remove a pending cwd pick (called after selection, cancel, or timeout). */
+export function removePendingCwdPick(messageTs: string): void {
+  const p = pending.get(messageTs);
+  if (p) {
+    clearTimeout(p.timer);
+    pending.delete(messageTs);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Constants                                                          */
+/* ------------------------------------------------------------------ */
+
+const MAX_DIR_BUTTONS = 20; // leave room for nav/control buttons in the 25-element limit
+const TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_PIN_BUTTONS = 10; // max pinned shortcuts per block
+
+/* ------------------------------------------------------------------ */
+/*  List directories only                                              */
+/* ------------------------------------------------------------------ */
+
+interface DirEntry {
+  name: string;
+  fullPath: string;
+}
+
+export function listDirs(dir: string): DirEntry[] {
+  try {
+    const entries = readdirSync(dir);
+    const results: DirEntry[] = [];
+    for (const name of entries) {
+      if (name.startsWith(".")) continue; // skip hidden
+      const fullPath = join(dir, name);
+      try {
+        const stat = statSync(fullPath);
+        if (stat.isDirectory()) {
+          results.push({ name, fullPath });
+        }
+      } catch {
+        // skip unreadable entries
+      }
+    }
+    results.sort((a, b) => a.name.localeCompare(b.name));
+    return results;
+  } catch {
+    return [];
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Build Slack blocks for the directory browser                       */
+/* ------------------------------------------------------------------ */
+
+function truncLabel(name: string, max = 60): string {
+  return name.length > max ? name.slice(0, max - 1) + "…" : name;
+}
+
+function chunk<T>(arr: T[], size: number): T[][] {
+  const result: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    result.push(arr.slice(i, i + size));
+  }
+  return result;
+}
+
+export function buildCwdPickerBlocks(
+  dir: string,
+  projects: Project[],
+): Array<Record<string, unknown>> {
+  const blocks: Array<Record<string, unknown>> = [];
+
+  // Header with current path
+  blocks.push({
+    type: "section",
+    text: { type: "mrkdwn", text: `📂 *\`${dir}\`*\nSelect this directory or navigate into a folder:` },
+  });
+
+  // Control buttons: Select, Parent, Cancel
+  const controlElements: Array<Record<string, unknown>> = [
+    {
+      type: "button",
+      text: { type: "plain_text", text: "✅ Select this directory" },
+      action_id: "cwd_pick_select",
+      value: dir,
+      style: "primary",
+    },
+  ];
+
+  const resolvedDir = resolve(dir);
+  if (resolvedDir !== "/") {
+    controlElements.push({
+      type: "button",
+      text: { type: "plain_text", text: "⬆️ Parent" },
+      action_id: "cwd_pick_parent",
+      value: dirname(dir),
+    });
+  }
+
+  controlElements.push({
+    type: "button",
+    text: { type: "plain_text", text: "❌ Cancel" },
+    action_id: "cwd_pick_cancel",
+    value: "cancel",
+    style: "danger",
+  });
+
+  blocks.push({ type: "actions", elements: controlElements });
+
+  // Pinned project shortcuts (if any, and not already in the current dir listing)
+  if (projects.length > 0) {
+    const pinChunks = chunk(projects.slice(0, MAX_PIN_BUTTONS * 2), MAX_PIN_BUTTONS);
+    for (const group of pinChunks) {
+      blocks.push({
+        type: "actions",
+        elements: group.map((p, i) => ({
+          type: "button",
+          text: { type: "plain_text", text: `📌 ${truncLabel(p.label)}` },
+          action_id: `cwd_pick_pin_${blocks.length}_${i}`,
+          value: p.path,
+        })),
+      });
+    }
+  }
+
+  // Directory listing
+  const dirs = listDirs(dir);
+
+  if (dirs.length > 0) {
+    const dirChunks = chunk(dirs, MAX_DIR_BUTTONS);
+    for (const group of dirChunks) {
+      blocks.push({
+        type: "actions",
+        elements: group.map((entry, i) => ({
+          type: "button",
+          text: { type: "plain_text", text: `📁 ${truncLabel(entry.name)}` },
+          action_id: `cwd_pick_nav_${blocks.length}_${i}`,
+          value: entry.fullPath,
+        })),
+      });
+    }
+  } else {
+    blocks.push({
+      type: "section",
+      text: { type: "mrkdwn", text: "_No subdirectories_" },
+    });
+  }
+
+  // Slack has a 50-block limit; truncate if needed
+  if (blocks.length > 50) {
+    blocks.length = 49;
+    blocks.push({
+      type: "section",
+      text: { type: "mrkdwn", text: "_…too many entries to display._" },
+    });
+  }
+
+  return blocks;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Post the cwd picker                                                */
+/* ------------------------------------------------------------------ */
+
+export interface PostCwdPickerParams {
+  client: WebClient;
+  channel: string;
+  threadTs: string;
+  prompt: string;
+  files: SlackFile[];
+  projects: Project[];
+  startDir?: string;
+  onSelect: (pick: PendingCwdPick, selectedDir: string) => void;
+}
+
+export async function postCwdPicker(params: PostCwdPickerParams): Promise<void> {
+  const startDir = params.startDir ?? homedir();
+  const blocks = buildCwdPickerBlocks(startDir, params.projects);
+
+  const result = await params.client.chat.postMessage({
+    channel: params.channel,
+    thread_ts: params.threadTs,
+    text: `📂 Browsing \`${startDir}\``,
+    blocks: blocks as any,
+  });
+
+  if (!result.ts) return;
+
+  const messageTs = result.ts;
+
+  const timer = setTimeout(async () => {
+    removePendingCwdPick(messageTs);
+    await params.client.chat.update({
+      channel: params.channel,
+      ts: messageTs,
+      text: "⏰ Directory picker timed out.",
+      blocks: [],
+    }).catch(() => {});
+  }, TIMEOUT_MS);
+
+  pending.set(messageTs, {
+    threadTs: params.threadTs,
+    channelId: params.channel,
+    prompt: params.prompt,
+    files: params.files,
+    pickerMessageTs: messageTs,
+    client: params.client,
+    currentDir: startDir,
+    timer,
+    projects: params.projects,
+    onSelect: params.onSelect,
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/*  Action handlers (called from slack.ts)                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Handle selecting the current directory as cwd.
+ */
+export async function handleCwdSelect(messageTs: string, selectedDir: string): Promise<void> {
+  const pick = pending.get(messageTs);
+  if (!pick) return;
+
+  removePendingCwdPick(messageTs);
+
+  // Update the picker message to show selection
+  await pick.client.chat.update({
+    channel: pick.channelId,
+    ts: pick.pickerMessageTs,
+    text: `📂 Using \`${selectedDir}\``,
+    blocks: [],
+  });
+
+  pick.onSelect(pick, selectedDir);
+}
+
+/**
+ * Handle navigating into a directory (or jumping to a pinned project).
+ */
+export async function handleCwdNav(messageTs: string, dir: string): Promise<void> {
+  const pick = pending.get(messageTs);
+  if (!pick) return;
+
+  pick.currentDir = dir;
+
+  const blocks = buildCwdPickerBlocks(dir, pick.projects);
+  await pick.client.chat.update({
+    channel: pick.channelId,
+    ts: pick.pickerMessageTs,
+    text: `📂 Browsing \`${dir}\``,
+    blocks: blocks as any,
+  });
+}
+
+/**
+ * Handle cancel action.
+ */
+export async function handleCwdCancel(messageTs: string): Promise<void> {
+  const pick = pending.get(messageTs);
+  if (!pick) return;
+
+  removePendingCwdPick(messageTs);
+
+  await pick.client.chat.update({
+    channel: pick.channelId,
+    ts: pick.pickerMessageTs,
+    text: "❌ Directory picker cancelled.",
+    blocks: [],
+  });
+}

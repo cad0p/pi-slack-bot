@@ -31,6 +31,12 @@ const baseConfig: Config = {
 
 import { parseMessage, scanProjects } from "./parser.js";
 import { BotSessionManager, SessionLimitError } from "./session-manager.js";
+import {
+  postCwdPicker,
+  handleCwdSelect,
+  getPendingCwdPick,
+  removePendingCwdPick,
+} from "./cwd-picker.js";
 
 function makeSession(threadTs: string) {
   return {
@@ -68,6 +74,26 @@ function makeManager(configOverrides: Partial<Config> = {}) {
   return { mgr, factory, sessions, config };
 }
 
+function makeMockClient() {
+  const posted: any[] = [];
+  const updated: any[] = [];
+  return {
+    posted,
+    updated,
+    chat: {
+      postMessage: mock.fn(async (opts: any) => {
+        const ts = `msg-${posted.length}`;
+        posted.push({ ...opts, ts });
+        return { ts };
+      }),
+      update: mock.fn(async (opts: any) => {
+        updated.push(opts);
+        return { ok: true };
+      }),
+    },
+  } as any;
+}
+
 describe("slack.ts cwd parsing — exact cwd", () => {
   it("resolves exact directory path as cwd and passes rest as prompt", async () => {
     const dir = tmpdir();
@@ -91,7 +117,7 @@ describe("slack.ts cwd parsing — exact cwd", () => {
   });
 });
 
-describe("slack.ts cwd parsing — fuzzy candidates with buttons", () => {
+describe("slack.ts cwd parsing — fuzzy candidates open cwd picker", () => {
   let tmpBase: string;
 
   beforeEach(() => {
@@ -104,110 +130,135 @@ describe("slack.ts cwd parsing — fuzzy candidates with buttons", () => {
     rmSync(tmpBase, { recursive: true, force: true });
   });
 
-  it("posts Block Kit buttons when fuzzy candidates found", async () => {
+  it("fuzzy candidates are resolved from parseMessage", () => {
     const knownProjects = scanProjects([tmpBase]);
     const parsed = parseMessage("cool do something", knownProjects);
 
     assert.equal(parsed.cwd, null);
     assert.ok(parsed.candidates.length > 0);
     assert.ok(parsed.candidates.some((c) => c.endsWith("my-cool-project")));
-
-    // Simulate: build Block Kit buttons
-    const buttons = parsed.candidates.map((candidate, i) => ({
-      type: "button" as const,
-      text: { type: "plain_text" as const, text: basename(candidate) },
-      action_id: `select_cwd_${i}`,
-      value: candidate,
-    }));
-
-    assert.ok(buttons.length > 0);
-    assert.equal(buttons[0].action_id, "select_cwd_0");
-    assert.ok(buttons[0].value.endsWith("my-cool-project"));
-    assert.equal(buttons[0].text.text, "my-cool-project");
   });
 
-  it("stores pending entry keyed by button message ts", () => {
-    const pendingCwd = new Map<string, { threadTs: string; channelId: string; prompt: string }>();
-    const buttonMessageTs = "msg-btn-1";
+  it("cwd picker posts directory browser with pinned projects for fuzzy matches", async () => {
+    const client = makeMockClient();
+    const onSelect = mock.fn();
+    const knownProjects = scanProjects([tmpBase]);
+    const parsed = parseMessage("cool do something", knownProjects);
 
-    pendingCwd.set(buttonMessageTs, {
-      threadTs: "ts1",
-      channelId: "C1",
-      prompt: "cool do something",
+    // Simulate the fuzzy match branch: matched projects become pins in the cwd picker
+    const matched = parsed.candidates.map((c) => ({ path: c, label: basename(c) }));
+    await postCwdPicker({
+      client,
+      channel: "C1",
+      threadTs: "T1",
+      prompt: parsed.prompt,
+      files: [],
+      projects: matched,
+      startDir: tmpBase,
+      onSelect,
     });
 
-    assert.ok(pendingCwd.has(buttonMessageTs));
-    const entry = pendingCwd.get(buttonMessageTs)!;
-    assert.equal(entry.threadTs, "ts1");
-    assert.equal(entry.prompt, "cool do something");
+    assert.equal(client.posted.length, 1);
+    const msg = client.posted[0];
+    assert.ok(msg.blocks.length > 0);
+
+    // Collect all action_ids from the blocks
+    const actionIds: string[] = [];
+    for (const block of msg.blocks) {
+      if (block.type === "actions" && Array.isArray(block.elements)) {
+        for (const el of block.elements) {
+          if (el.action_id) actionIds.push(el.action_id);
+        }
+      }
+    }
+
+    // Should have at least one pinned project button
+    const hasPinButton = actionIds.some((id) => id.startsWith("cwd_pick_pin_"));
+    assert.ok(hasPinButton, `Expected cwd_pick_pin_ in action IDs: ${actionIds.join(", ")}`);
+
+    // Clean up
+    removePendingCwdPick(msg.ts);
   });
 });
 
-describe("slack.ts cwd parsing — no match fallback", () => {
-  it("uses homedir when no cwd and no candidates", async () => {
-    const { mgr, sessions } = makeManager();
+describe("slack.ts cwd parsing — no match fallback opens cwd picker from home", () => {
+  it("no-match branch opens cwd picker at homedir", async () => {
     const parsed = parseMessage("zzznomatch do something", []);
-
     assert.equal(parsed.cwd, null);
     assert.deepEqual(parsed.candidates, []);
 
-    // Simulate handler logic: fallback branch
-    const session = await mgr.getOrCreate({
-      threadTs: "ts1",
-      channelId: "C1",
-      cwd: homedir(),
+    // In the new flow, the no-match branch opens the cwd picker at homedir
+    const client = makeMockClient();
+    const onSelect = mock.fn();
+
+    await postCwdPicker({
+      client,
+      channel: "C1",
+      threadTs: "T1",
+      prompt: "zzznomatch do something",
+      files: [],
+      projects: [],
+      onSelect,
     });
 
-    assert.equal(session.cwd, homedir());
-    // Full text used as prompt (not parsed.prompt which is the same for no-match)
-    session.enqueue(() => session.prompt("zzznomatch do something"));
-    assert.equal(sessions.get("ts1")!.enqueue.mock.callCount(), 1);
+    const pick = getPendingCwdPick(client.posted[0].ts);
+    assert.ok(pick);
+    assert.equal(pick!.currentDir, homedir());
+    assert.equal(pick!.prompt, "zzznomatch do something");
+
+    removePendingCwdPick(client.posted[0].ts);
   });
 });
 
-describe("slack.ts button action handler", () => {
-  it("resolves pending entry, creates session with selected cwd, enqueues prompt", async () => {
+describe("slack.ts cwd picker select handler", () => {
+  it("onSelect callback creates session with selected cwd and enqueues prompt", async () => {
     const { mgr, sessions } = makeManager();
-    const pendingCwd = new Map<string, { threadTs: string; channelId: string; prompt: string }>();
+    const client = makeMockClient();
+    let selectDone: () => void;
+    const selectPromise = new Promise<void>((resolve) => { selectDone = resolve; });
 
-    // Simulate: buttons were posted, pending entry stored
-    const buttonMessageTs = "msg-btn-1";
-    pendingCwd.set(buttonMessageTs, {
-      threadTs: "ts1",
-      channelId: "C1",
+    // Simulate: cwd picker posted, user selects a directory
+    await postCwdPicker({
+      client,
+      channel: "C1",
+      threadTs: "T1",
       prompt: "do something",
+      files: [],
+      projects: [],
+      startDir: tmpdir(),
+      onSelect: async (pick, selectedDir) => {
+        const session = await mgr.getOrCreate({
+          threadTs: pick.threadTs,
+          channelId: pick.channelId,
+          cwd: selectedDir,
+        });
+        session.enqueue(() => session.prompt(pick.prompt));
+        selectDone();
+      },
     });
 
-    // Simulate: user clicks button with value="/workplace/my-cool-project"
+    const messageTs = client.posted[0].ts;
     const selectedCwd = "/workplace/my-cool-project";
-    const pending = pendingCwd.get(buttonMessageTs);
-    assert.ok(pending);
-    pendingCwd.delete(buttonMessageTs);
+    await handleCwdSelect(messageTs, selectedCwd);
 
-    // Verify pending was consumed
-    assert.ok(!pendingCwd.has(buttonMessageTs));
+    // Wait for async onSelect to complete
+    await selectPromise;
 
-    // Create session with selected cwd
-    const session = await mgr.getOrCreate({
-      threadTs: pending!.threadTs,
-      channelId: pending!.channelId,
-      cwd: selectedCwd,
-    });
-
-    assert.equal(session.cwd, selectedCwd);
-    session.enqueue(() => session.prompt(pending!.prompt));
-    assert.equal(sessions.get("ts1")!.enqueue.mock.callCount(), 1);
+    // Session should have been created with the selected cwd
+    const session = sessions.get("T1");
+    assert.ok(session);
+    assert.equal(session!.cwd, selectedCwd);
+    assert.equal(session!.enqueue.mock.callCount(), 1);
   });
 
-  it("ignores action if no pending entry found", () => {
-    const pendingCwd = new Map<string, { threadTs: string; channelId: string; prompt: string }>();
-    const pending = pendingCwd.get("nonexistent-ts");
-    assert.equal(pending, undefined);
+  it("ignores select if no pending pick exists", async () => {
+    // Should not throw
+    await handleCwdSelect("nonexistent-ts", "/some/dir");
   });
 });
 
 describe("slack.ts createApp integration", () => {
-  it("exports pendingCwd map and knownProjects", async () => {
+  it("exports sessionManager and knownProjects", async () => {
     // Verify the module shape — import createApp and check return type
     const { createApp } = await import("./slack.js");
     assert.equal(typeof createApp, "function");
