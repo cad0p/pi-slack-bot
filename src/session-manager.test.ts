@@ -21,6 +21,7 @@ const baseConfig: Config = {
   streamThrottleMs: 3000,
   slackMsgLimit: 3900,
   workspaceDirs: [],
+  pasteProvider: "none" as const,
 };
 
 function makeSession(threadTs: string, cwd = "/tmp", sessionPath = `/tmp/sessions/${threadTs}.jsonl`) {
@@ -386,6 +387,52 @@ describe("BotSessionManager — restoreAll", () => {
     // (getOrCreate returns existing, so _restoreOne skips the Slack post)
     // Actually, _restoreOne checks _sessions.has() and returns true early
 
+    mgr.disposeRegistry();
+  });
+});
+
+describe("BotSessionManager — edge cases", () => {
+  it("session limit reached then freed allows new session", async () => {
+    const { mgr } = makeManager({ maxSessions: 1 });
+    await mgr.getOrCreate({ threadTs: "ts1", channelId: "C1", cwd: "/tmp" });
+
+    // At limit
+    await assert.rejects(
+      () => mgr.getOrCreate({ threadTs: "ts2", channelId: "C1", cwd: "/tmp" }),
+      SessionLimitError,
+    );
+
+    // Free one
+    await mgr.dispose("ts1");
+
+    // Should succeed now
+    const s = await mgr.getOrCreate({ threadTs: "ts2", channelId: "C1", cwd: "/tmp" });
+    assert.equal(s.threadTs, "ts2");
+    mgr.disposeRegistry();
+  });
+
+  it("reaper skips sessions that are still active (not idle)", async () => {
+    const { mgr, sessions } = makeManager({ sessionIdleTimeoutSecs: 1 });
+    await mgr.getOrCreate({ threadTs: "ts1", channelId: "C1", cwd: "/tmp" });
+    await mgr.getOrCreate({ threadTs: "ts2", channelId: "C1", cwd: "/tmp" });
+
+    // Make ts1 idle, keep ts2 active
+    sessions.get("ts1")!.lastActivity = new Date(Date.now() - 2000);
+    sessions.get("ts2")!.lastActivity = new Date();
+
+    await (mgr as any)._reap();
+
+    assert.equal(mgr.count(), 1);
+    assert.ok(mgr.get("ts2"), "active session should survive reap");
+    assert.ok(!mgr.get("ts1"), "idle session should be reaped");
+    mgr.disposeRegistry();
+  });
+
+  it("dispose of non-existent session is a no-op", async () => {
+    const { mgr } = makeManager();
+    // Should not throw
+    await mgr.dispose("nonexistent");
+    assert.equal(mgr.count(), 0);
     mgr.disposeRegistry();
   });
 });

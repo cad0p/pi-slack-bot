@@ -1,4 +1,5 @@
 import { expandHome } from "./paths.js";
+import { parsePasteProviderType, type PasteProviderType } from "./paste-provider.js";
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
@@ -24,6 +25,9 @@ export interface Config {
 
   // cwd discovery
   workspaceDirs: string[];
+
+  // Diff review
+  pasteProvider: PasteProviderType;
 }
 
 function required(name: string): string {
@@ -72,5 +76,7 @@ export function loadConfig(): Config {
       .split(",")
       .map((d) => expandHome(d.trim()))
       .filter(Boolean),
+
+    pasteProvider: parsePasteProviderType(optional("PASTE_PROVIDER", "amazon")),
   };
 }

@@ -24,6 +24,7 @@ const baseConfig: Config = {
   streamThrottleMs: 3000,
   slackMsgLimit: 3900,
   workspaceDirs: [],
+  pasteProvider: "none" as const,
 };
 
 // Helpers to simulate the Slack event flow without a real App instance.

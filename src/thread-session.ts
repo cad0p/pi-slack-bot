@@ -9,6 +9,9 @@ import { createFilePickerTool, type FilePickerContext } from "./file-picker.js";
 import { createShareFileTool, type ShareFileContext } from "./file-sharing.js";
 import { encodeCwd } from "./session-path.js";
 import { hasFileModifications, postDiffReview, getHeadRef } from "./diff-reviewer.js";
+import { createPasteProvider, type PasteProvider } from "./paste-provider.js";
+import { createNoopUiContext } from "./noop-ui-context.js";
+import { isRalphNotification, isRalphEndNotification } from "./ralph-notifications.js";
 import type { ToolCallRecord } from "./formatter.js";
 
 export interface ThreadSessionCreateParams {
@@ -33,6 +36,7 @@ export class ThreadSession {
   private _resourceLoader: DefaultResourceLoader;
   private _client: WebClient;
   private _updater: StreamingUpdater;
+  private _pasteProvider: PasteProvider;
   private _tasks: Array<() => Promise<void>> = [];
   private _processing = false;
 
@@ -45,6 +49,7 @@ export class ThreadSession {
     agentSession: AgentSession,
     resourceLoader: DefaultResourceLoader,
     updater: StreamingUpdater,
+    pasteProvider: PasteProvider,
   ) {
     this.threadTs = threadTs;
     this.channelId = channelId;
@@ -54,6 +59,7 @@ export class ThreadSession {
     this._agentSession = agentSession;
     this._resourceLoader = resourceLoader;
     this._updater = updater;
+    this._pasteProvider = pasteProvider;
     this.lastActivity = new Date();
   }
 
@@ -136,17 +142,12 @@ export class ThreadSession {
 
     // Bind extensions with a minimal UI context so session_start fires.
     // This is required for extensions like ralph that load state in session_start.
-    // We cast because ExtensionUIContext has many TUI-only methods we don't need.
-    const noopUiContext = {
-      select: async () => undefined,
-      confirm: async () => false,
-      input: async () => undefined,
-      notify: (message: string, type?: string) => {
+    const uiContext = createNoopUiContext({
+      notify: (message: string, type?: "info" | "warning" | "error") => {
         console.log(`[Extension notify ${type ?? "info"}] ${message}`);
         // Detect ralph-related notifications and post to Slack.
-        const isRalphMsg = /Ralph loop|ralph loop|[Ll]oop (paused|resumed|auto-resumed|ended|is not paused|is already running)|[Aa]vailable presets:|Preset:|No active loop|No loop state|No (iteration history|past loops|presets found)|Steering queued|Unknown preset|has no hats/i.test(message);
-        if (isRalphMsg) {
-          if (message.includes("ended:") || message.includes("complete") || message.includes("Task complete")) {
+        if (isRalphNotification(message)) {
+          if (isRalphEndNotification(message)) {
             ts._ralphBackgroundActive = false;
           }
           ts._postToThread(`🎩 ${message}`).catch((err) => {
@@ -154,31 +155,9 @@ export class ThreadSession {
           });
         }
       },
-      onTerminalInput: () => () => {},
-      setStatus: () => {},
-      setWorkingMessage: () => {},
-      setWidget: () => {},
-      setFooter: () => {},
-      setHeader: () => {},
-      setTitle: () => {},
-      custom: async () => undefined,
-      pasteToEditor: () => {},
-      setEditorText: () => {},
-      getEditorText: () => "",
-      editor: async () => undefined,
-      setCustomEditor: () => {},
-      theme: {
-        fg: (_c: string, t: string) => t,
-        bg: (_c: string, t: string) => t,
-        bold: (t: string) => t,
-        italic: (t: string) => t,
-        underline: (t: string) => t,
-        inverse: (t: string) => t,
-        strikethrough: (t: string) => t,
-      },
-    };
+    });
     await session.bindExtensions({
-      uiContext: noopUiContext as any,
+      uiContext,
       onError: (err) => {
         console.error(`[Extension error] ${err.extensionPath} (${err.event}): ${err.error}`, err.stack ?? "");
       },
@@ -198,6 +177,7 @@ export class ThreadSession {
     }
 
     const updater = new StreamingUpdater(params.client, params.config.streamThrottleMs);
+    const pasteProvider = createPasteProvider(params.config.pasteProvider);
 
     const ts = new ThreadSession(
       params.threadTs,
@@ -208,6 +188,7 @@ export class ThreadSession {
       session,
       resourceLoader,
       updater,
+      pasteProvider,
     );
     ts._setupPersistentSubscriber();
     return ts;
@@ -288,6 +269,7 @@ export class ThreadSession {
                 await postDiffReview(this._client, this.channelId, this.threadTs, this.cwd, {
                   baseRef,
                   toolRecords,
+                  pasteProvider: this._pasteProvider,
                 });
               } catch (err) {
                 console.error(`[ThreadSession ${this.threadTs}] Failed to post diff review:`, err);
@@ -504,5 +486,10 @@ export class ThreadSession {
   /** Available file-based prompt templates (e.g. /review, /test, /explain). */
   get promptTemplates(): ReadonlyArray<PromptTemplate> {
     return this._agentSession.promptTemplates;
+  }
+
+  /** The configured paste provider for diff uploads. */
+  get pasteProvider(): PasteProvider {
+    return this._pasteProvider;
   }
 }

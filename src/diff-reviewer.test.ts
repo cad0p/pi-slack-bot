@@ -7,7 +7,6 @@ import {
   extractModifiedFiles,
   hasFileModifications,
   generateDiff,
-  createPaste,
   computeDiffStats,
   generateSyntheticDiff,
   getHeadRef,
@@ -375,18 +374,46 @@ describe("generateSyntheticDiff", () => {
   });
 });
 
-describe("createPaste", () => {
-  it("returns null when curl fails (e.g. no midway cookie)", () => {
-    // Use a bogus HOME so the midway cookie doesn't exist
+import { AmazonPasteProvider, NullPasteProvider, GistPasteProvider, parsePasteProviderType, createPasteProvider } from "./paste-provider.js";
+
+describe("PasteProvider", () => {
+  it("NullPasteProvider always returns null", async () => {
+    const provider = new NullPasteProvider();
+    const result = await provider.create("content", "title");
+    assert.equal(result, null);
+  });
+
+  it("AmazonPasteProvider returns null when curl fails", async () => {
     const origHome = process.env.HOME;
     process.env.HOME = "/tmp/nonexistent-home-" + Date.now();
     try {
-      const result = createPaste("test content", "test title");
-      // Should return null (curl will fail to auth) or succeed if somehow reachable
-      // Either way, it should not throw
+      const provider = new AmazonPasteProvider();
+      const result = await provider.create("test content", "test title");
       assert.ok(result === null || typeof result?.url === "string");
     } finally {
       process.env.HOME = origHome;
     }
+  });
+
+  it("GistPasteProvider returns null with no token", async () => {
+    const provider = new GistPasteProvider("");
+    const result = await provider.create("content", "title");
+    assert.equal(result, null);
+  });
+
+  it("parsePasteProviderType accepts valid types", () => {
+    assert.equal(parsePasteProviderType("amazon"), "amazon");
+    assert.equal(parsePasteProviderType("gist"), "gist");
+    assert.equal(parsePasteProviderType("none"), "none");
+  });
+
+  it("parsePasteProviderType rejects invalid types", () => {
+    assert.throws(() => parsePasteProviderType("invalid"), /Invalid PASTE_PROVIDER/);
+  });
+
+  it("createPasteProvider returns correct provider types", () => {
+    assert.ok(createPasteProvider("amazon") instanceof AmazonPasteProvider);
+    assert.ok(createPasteProvider("gist") instanceof GistPasteProvider);
+    assert.ok(createPasteProvider("none") instanceof NullPasteProvider);
   });
 });

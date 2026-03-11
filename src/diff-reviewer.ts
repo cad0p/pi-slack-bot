@@ -1,18 +1,18 @@
 /**
- * Diff reviewer — generates git diffs and uploads them to paste.amazon.com
- * for syntax-highlighted review, posting the link to Slack.
+ * Diff reviewer — generates git diffs and posts them for review.
  *
  * Handles three scenarios:
  * 1. Uncommitted changes → `git diff HEAD` + untracked files
  * 2. Agent committed during turn → `git diff <baseRef>` to capture committed + uncommitted
  * 3. No git repo → synthetic diffs from edit/write tool args
  *
- * Also provides an on-demand `!diff` command.
+ * Uses a PasteProvider (configurable) for syntax-highlighted links,
+ * with Slack file upload as universal fallback.
  */
 import { execSync } from "child_process";
-import { writeFileSync, unlinkSync } from "fs";
 import type { WebClient } from "@slack/web-api";
 import type { ToolCallRecord } from "./formatter.js";
+import type { PasteProvider } from "./paste-provider.js";
 
 /** Tool names that modify files on disk. */
 const FILE_MUTATING_TOOLS = new Set(["edit", "write"]);
@@ -79,24 +79,11 @@ export function isGitRepo(cwd: string): boolean {
 }
 
 export interface GenerateDiffOptions {
-  /**
-   * Base commit to diff from (e.g. the HEAD SHA at agent turn start).
-   * When set, the diff includes committed changes since this ref plus
-   * any uncommitted working tree changes and untracked files.
-   * When unset, only uncommitted changes and untracked files are shown.
-   */
   baseRef?: string;
 }
 
 /**
  * Generate a git diff for the working directory.
- *
- * With baseRef: shows everything from that commit to current state
- * (committed + staged + unstaged + untracked).
- *
- * Without baseRef: shows only uncommitted changes
- * (staged + unstaged + untracked).
- *
  * Returns null if not in a git repo or no changes found.
  */
 export function generateDiff(cwd: string, options?: GenerateDiffOptions): DiffResult | null {
@@ -104,20 +91,14 @@ export function generateDiff(cwd: string, options?: GenerateDiffOptions): DiffRe
 
   try {
     const baseRef = options?.baseRef;
-
-    // Get diff of changes. When baseRef is provided, this captures both
-    // committed changes (since baseRef) AND uncommitted working tree changes.
-    // `git diff <ref>` compares <ref> to the working tree (not HEAD).
     let diff: string;
     const diffCmd = baseRef ? `git diff ${baseRef}` : "git diff HEAD";
     try {
       diff = execSync(diffCmd, { cwd, encoding: "utf-8", maxBuffer: 2 * 1024 * 1024 });
     } catch {
-      // Fall back for repos with no commits yet
       diff = execSync("git diff --cached", { cwd, encoding: "utf-8", maxBuffer: 2 * 1024 * 1024 });
     }
 
-    // Also pick up untracked new files by diffing them against /dev/null
     diff = appendUntrackedDiffs(diff, cwd);
 
     if (!diff.trim()) return null;
@@ -161,18 +142,10 @@ function appendUntrackedDiffs(diff: string, cwd: string): string {
 /**
  * Generate a synthetic diff from edit/write tool records.
  * Used when the working directory is not a git repo.
- *
- * - `edit` calls have `path`, `oldText`, `newText` → inline replacement diff
- * - `write` calls have `path`, `content` → show full file as new content
  */
-export function generateSyntheticDiff(records: ToolCallRecord[], cwd: string): DiffResult | null {
+export function generateSyntheticDiff(records: ToolCallRecord[], _cwd: string): DiffResult | null {
   const parts: string[] = [];
-
-  // Deduplicate: for write calls to the same file, only show the last one.
-  // For edit calls, show each one (they're incremental).
   const seenWrites = new Set<string>();
-
-  // Process in reverse so we can skip earlier writes to the same file
   const reversed = [...records].reverse();
   const toProcess: ToolCallRecord[] = [];
 
@@ -212,9 +185,6 @@ export function generateSyntheticDiff(records: ToolCallRecord[], cwd: string): D
   return buildDiffResult(diff);
 }
 
-/**
- * Format a synthetic diff for an edit (oldText → newText replacement).
- */
 function formatEditDiff(path: string, oldText: string, newText: string): string {
   const oldLines = oldText.split("\n");
   const newLines = newText.split("\n");
@@ -231,9 +201,6 @@ function formatEditDiff(path: string, oldText: string, newText: string): string 
   return [...header, ...body].join("\n");
 }
 
-/**
- * Format a synthetic diff for a new/overwritten file.
- */
 function formatNewFileDiff(path: string, content: string): string {
   const lines = content.split("\n");
   const header = [
@@ -247,9 +214,6 @@ function formatNewFileDiff(path: string, content: string): string {
   return [...header, ...body].join("\n");
 }
 
-/**
- * Build a DiffResult from raw unified diff content.
- */
 function buildDiffResult(diff: string): DiffResult {
   const { fileCount, insertions, deletions } = computeDiffStats(diff);
   const statParts: string[] = [];
@@ -261,7 +225,6 @@ function buildDiffResult(diff: string): DiffResult {
 
 /**
  * Compute diff stats by parsing the unified diff content directly.
- * This correctly counts untracked files (which `git diff HEAD --stat` misses).
  */
 export function computeDiffStats(diff: string): {
   fileCount: number;
@@ -292,84 +255,20 @@ export function computeDiffStats(diff: string): {
   return { fileCount, insertions, deletions };
 }
 
-export interface PasteResult {
-  /** The paste URL (e.g. https://paste.amazon.com/show/samfp/1234567890) */
-  url: string;
-}
-
 /**
- * Create a paste on paste.amazon.com with the given content.
- * Returns the paste URL, or null if the upload fails.
- *
- * Uses midway cookie auth (must have valid midway session).
- */
-export function createPaste(content: string, title: string, language = "diff"): PasteResult | null {
-  const cookieFile = `${process.env.HOME}/.midway/cookie`;
-
-  try {
-    // Step 1: GET the page to obtain a CSRF authenticity token
-    const pageHtml = execSync(
-      `curl -s --anyauth --location-trusted --negotiate -u : ` +
-      `--cookie "${cookieFile}" --cookie-jar "${cookieFile}" ` +
-      `"https://paste.amazon.com/"`,
-      { encoding: "utf-8", timeout: 15000 },
-    );
-
-    const tokenMatch = pageHtml.match(/name="authenticity_token"[^>]*value="([^"]+)"/);
-    if (!tokenMatch) {
-      console.error("[DiffReviewer] Could not extract CSRF token from paste.amazon.com");
-      return null;
-    }
-    const token = tokenMatch[1];
-
-    // Step 2: POST the paste content. Write content to a temp file to avoid
-    // shell escaping issues with large diffs.
-    const tmpFile = `/tmp/pi-diff-paste-${Date.now()}.txt`;
-    writeFileSync(tmpFile, content, "utf-8");
-
-    try {
-      const headers = execSync(
-        `curl -s --anyauth --location-trusted --negotiate -u : ` +
-        `--cookie "${cookieFile}" --cookie-jar "${cookieFile}" ` +
-        `-X POST "https://paste.amazon.com/create" ` +
-        `--data-urlencode "authenticity_token=${token}" ` +
-        `--data-urlencode "text@${tmpFile}" ` +
-        `--data-urlencode "language=${language}" ` +
-        `--data-urlencode "title=${title}" ` +
-        `--data-urlencode "numbers=1" ` +
-        `-D - -o /dev/null`,
-        { encoding: "utf-8", timeout: 30000 },
-      );
-
-      const locationMatch = headers.match(/^location:\s*(.+)$/mi);
-      if (!locationMatch) {
-        console.error("[DiffReviewer] No redirect location from paste.amazon.com create");
-        return null;
-      }
-
-      return { url: locationMatch[1].trim() };
-    } finally {
-      try { unlinkSync(tmpFile); } catch { /* ignore */ }
-    }
-  } catch (err) {
-    console.error("[DiffReviewer] Failed to create paste:", err);
-    return null;
-  }
-}
-
-/**
- * Upload a diff via paste.amazon.com (preferred) or Slack file snippet (fallback).
+ * Upload a diff via paste provider (preferred) or Slack file snippet (fallback).
  */
 async function uploadAndPost(
   client: WebClient,
   channelId: string,
   threadTs: string,
   result: DiffResult,
+  pasteProvider: PasteProvider,
 ): Promise<void> {
   const title = `${result.fileCount} file${result.fileCount === 1 ? "" : "s"} changed`;
 
-  // Try paste.amazon.com first for nice syntax-highlighted rendering
-  const paste = createPaste(result.diff, title);
+  // Try the configured paste provider first
+  const paste = await pasteProvider.create(result.diff, title);
   if (paste) {
     const statsLine = result.stats ? `\n> ${result.stats}` : "";
     await client.chat.postMessage({
@@ -382,7 +281,6 @@ async function uploadAndPost(
   }
 
   // Fallback: upload as Slack file snippet
-  console.warn("[DiffReviewer] paste.amazon.com failed, falling back to Slack file snippet");
   await client.files.uploadV2({
     channel_id: channelId,
     thread_ts: threadTs,
@@ -394,26 +292,13 @@ async function uploadAndPost(
 }
 
 export interface PostDiffOptions {
-  /**
-   * Base git ref from before the agent turn started.
-   * Used to detect committed changes.
-   */
   baseRef?: string | null;
-  /**
-   * Tool records from the agent turn.
-   * Used for synthetic diffs when not in a git repo.
-   */
   toolRecords?: ToolCallRecord[];
+  pasteProvider?: PasteProvider;
 }
 
 /**
  * Post a diff review for the current working directory.
- *
- * Strategy:
- * 1. Git repo with baseRef → diff from baseRef (catches commits + uncommitted)
- * 2. Git repo without baseRef → diff from HEAD (uncommitted only, for !diff command)
- * 3. No git repo with tool records → synthetic diff from edit/write args
- *
  * Returns true if a diff was posted, false if no changes found.
  */
 export async function postDiffReview(
@@ -426,18 +311,20 @@ export async function postDiffReview(
   const baseRef = options?.baseRef ?? undefined;
   const toolRecords = options?.toolRecords;
 
-  // Try git diff first (handles both committed and uncommitted)
+  // Lazy-import to avoid circular dependency; default to NullPasteProvider
+  const { NullPasteProvider } = await import("./paste-provider.js");
+  const pasteProvider = options?.pasteProvider ?? new NullPasteProvider();
+
   const gitResult = generateDiff(cwd, { baseRef });
   if (gitResult) {
-    await uploadAndPost(client, channelId, threadTs, gitResult);
+    await uploadAndPost(client, channelId, threadTs, gitResult, pasteProvider);
     return true;
   }
 
-  // No git changes (or not a git repo) — try synthetic diff from tool records
   if (toolRecords && toolRecords.length > 0) {
     const syntheticResult = generateSyntheticDiff(toolRecords, cwd);
     if (syntheticResult) {
-      await uploadAndPost(client, channelId, threadTs, syntheticResult);
+      await uploadAndPost(client, channelId, threadTs, syntheticResult, pasteProvider);
       return true;
     }
   }

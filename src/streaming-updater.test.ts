@@ -512,4 +512,50 @@ describe("StreamingUpdater", () => {
     assert.ok(errCall.text.length < 200, `error text should be truncated, got ${errCall.text.length}`);
     assert.ok(errCall.text.endsWith("..."), "should end with ...");
   });
+
+  // ── Edge case tests ──────────────────────────────────────────────
+
+  it("handles chat.update throwing a network error during flush", async () => {
+    const client = makeClient();
+    client.chat.update.mockRejectedValueOnce(new Error("network timeout"));
+
+    const updater = new StreamingUpdater(client, 3000);
+    const state = await updater.begin("C1", "ts1");
+    updater.appendText(state, "hello");
+
+    // Flush the scheduled timer to trigger the failing update
+    flushTimers();
+    // Allow the promise to settle
+    await new Promise((r) => realSetTimeout(r, 50));
+
+    // Re-establish the mock so finalize works
+    client.chat.update.mockResolvedValue({});
+    await updater.finalize(state);
+
+    // Finalize should still complete (reactions changed)
+    assert.ok(client.reactions.remove.mock.calls.length >= 1);
+  });
+
+  it("handles msg_too_long retry reducing below minimum", async () => {
+    const client = makeClient();
+    // Always return msg_too_long
+    client.chat.update.mockRejectedValue(
+      Object.assign(new Error("msg_too_long"), { data: { error: "msg_too_long" } }),
+    );
+
+    const updater = new StreamingUpdater(client, 3000, 200);
+    const state = await updater.begin("C1", "ts1");
+    updater.appendText(state, "x".repeat(300));
+
+    // Finalize will try to flush — the recursive retry should eventually
+    // throw when limit gets below 100
+    try {
+      await updater.finalize(state);
+    } catch {
+      // Expected — the msg_too_long retry bottoms out
+    }
+
+    // Should have attempted multiple retries (200 → 120 → 72 → throw)
+    assert.ok(client.chat.update.mock.calls.length >= 2, "should have retried");
+  });
 });

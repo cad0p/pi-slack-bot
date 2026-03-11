@@ -229,7 +229,9 @@ const handlers: Record<string, CommandHandler> = {
       await reply(ctx, "No active session.");
       return;
     }
-    const posted = await postDiffReview(ctx.client, ctx.channel, ctx.threadTs, ctx.session.cwd);
+    const posted = await postDiffReview(ctx.client, ctx.channel, ctx.threadTs, ctx.session.cwd, {
+      pasteProvider: ctx.session.pasteProvider,
+    });
     if (!posted) {
       await reply(ctx, "No uncommitted changes found (or not a git repo).");
     }

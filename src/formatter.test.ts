@@ -273,3 +273,78 @@ describe("formatToolLog", () => {
     assert.ok(lines[lines.length - 2].includes("───"), "should have footer separator");
   });
 });
+
+// ── Edge case tests ──────────────────────────────────────────────
+
+describe("convertMarkdownTables — edge cases", () => {
+  it("does not convert tables inside code blocks", () => {
+    const md = "```\n| A | B |\n|---|---|\n| 1 | 2 |\n```";
+    const result = convertMarkdownTables(md);
+    // Should pass through unchanged (already inside code block)
+    assert.ok(result.includes("| A | B |"), "table inside code block should be unchanged");
+    // Should not have double-wrapped in another code block
+    const fenceCount = (result.match(/```/g) ?? []).length;
+    assert.equal(fenceCount, 2, "should still have exactly 2 fences");
+  });
+
+  it("handles empty table (header + separator only, no data rows)", () => {
+    const md = "| Col1 | Col2 |\n|------|------|\n";
+    const result = convertMarkdownTables(md);
+    // With only header + separator (2 lines < 3), should pass through as-is
+    assert.ok(result.includes("| Col1 | Col2 |"));
+  });
+
+  it("handles unicode in table cells", () => {
+    const md = "| Name | Emoji |\n|------|-------|\n| café | 🎉 |\n";
+    const result = convertMarkdownTables(md);
+    assert.ok(result.includes("café"));
+    assert.ok(result.includes("🎉"));
+  });
+});
+
+describe("splitMrkdwn — edge cases", () => {
+  it("does not split inside a code block", () => {
+    // Code block that's under the limit but would normally be split at a newline
+    const code = "```\n" + "line\n".repeat(50) + "```";
+    const chunks = splitMrkdwn(code, 500);
+    // If the total is under limit, it should be one chunk
+    if (code.length <= 500) {
+      assert.equal(chunks.length, 1);
+    }
+    // Verify no chunk starts mid-code-block
+    for (const chunk of chunks) {
+      const fences = (chunk.match(/```/g) ?? []).length;
+      assert.equal(fences % 2, 0, `chunk should have balanced fences: ${chunk.slice(0, 50)}...`);
+    }
+  });
+
+  it("handles a message that is exactly at the limit", () => {
+    const msg = "x".repeat(100);
+    const chunks = splitMrkdwn(msg, 100);
+    assert.equal(chunks.length, 1);
+    assert.equal(chunks[0], msg);
+  });
+});
+
+describe("formatToolArgs — edge cases", () => {
+  it("handles unicode in tool arguments", () => {
+    const result = formatToolArgs("bash", { command: "echo 'héllo 🌍'" });
+    assert.ok(result.includes("héllo"));
+    assert.ok(result.includes("🌍"));
+  });
+
+  it("handles null args", () => {
+    const result = formatToolArgs("read", null);
+    assert.equal(result, "");
+  });
+
+  it("handles undefined args", () => {
+    const result = formatToolArgs("read", undefined);
+    assert.equal(result, "");
+  });
+
+  it("handles empty object args", () => {
+    const result = formatToolArgs("unknown_tool", {});
+    assert.equal(result, "");
+  });
+});
