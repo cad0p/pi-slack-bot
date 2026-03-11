@@ -31,19 +31,19 @@ function getPosted(client: any): string[] {
 
 describe("REACTION_MAP", () => {
   it("maps x to cancel", () => {
-    assert.equal(REACTION_MAP["x"], "cancel");
+    assert.equal(REACTION_MAP.x, "cancel");
   });
 
   it("maps arrows_counterclockwise to retry", () => {
-    assert.equal(REACTION_MAP["arrows_counterclockwise"], "retry");
+    assert.equal(REACTION_MAP.arrows_counterclockwise, "retry");
   });
 
   it("maps clipboard to diff", () => {
-    assert.equal(REACTION_MAP["clipboard"], "diff");
+    assert.equal(REACTION_MAP.clipboard, "diff");
   });
 
   it("maps clamp to compact", () => {
-    assert.equal(REACTION_MAP["clamp"], "compact");
+    assert.equal(REACTION_MAP.clamp, "compact");
   });
 });
 

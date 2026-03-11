@@ -69,8 +69,9 @@ export function convertMarkdownTables(markdown: string): string {
           result.push(`${B}${title}${B}`);
           for (let c = 1; c < headers.length; c++) {
             const val = row[c] ?? "";
+            const hdr = headers[c] ?? "";
             if (val) {
-              result.push(`  • ${headers[c]}: ${val}`);
+              result.push(`  • ${hdr}: ${val}`);
             }
           }
         }
@@ -282,7 +283,7 @@ function truncateStr(s: string, max: number): string {
 /**
  * Shorten a file path for display — last 2 components.
  */
-export function shortPath(fullPath: string): string {
+function shortPath(fullPath: string): string {
   const parts = fullPath.split("/").filter(Boolean);
   if (parts.length <= 2) return fullPath;
   return parts.slice(-2).join("/");
@@ -292,7 +293,7 @@ export function shortPath(fullPath: string): string {
  * Human-readable one-liner describing a tool call.
  * Used for inline streaming display and the tool log.
  */
-export function describeToolCall(toolName: string, args: unknown, opts?: { mrkdwn?: boolean }): string {
+function describeToolCall(toolName: string, args: unknown, opts?: { mrkdwn?: boolean }): string {
   const bt = opts?.mrkdwn ? "`" : "";
   if (!args || typeof args !== "object") return `${bt}${toolName}${bt}`;
   const obj = args as Record<string, unknown>;
@@ -311,7 +312,7 @@ export function describeToolCall(toolName: string, args: unknown, opts?: { mrkdw
       return `Edited ${bt}${p}${bt}`;
     }
     case "bash": {
-      const cmd = String(obj.command ?? "").split("\n")[0];
+      const cmd = String(obj.command ?? "").split("\n")[0] ?? "";
       return `Ran ${bt}${truncateStr(cmd, 50)}${bt}`;
     }
     case "web_search": {

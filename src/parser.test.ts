@@ -54,7 +54,7 @@ describe("loadProjects", () => {
       const results = loadProjects([], configPath);
       const proj = results.find((p) => p.path.endsWith("my-project"));
       assert.ok(proj);
-      assert.equal(proj!.label, "🚀 My Project");
+      assert.equal(proj.label, "🚀 My Project");
     } finally {
       rmSync(tmpBase, { recursive: true, force: true });
     }

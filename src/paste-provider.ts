@@ -133,12 +133,13 @@ export class GistPasteProvider implements PasteProvider {
         },
       );
 
-      const data = JSON.parse(response);
-      if (data.html_url) {
+      const data: Record<string, unknown> = JSON.parse(response) as Record<string, unknown>;
+      if (typeof data.html_url === "string") {
         return { url: data.html_url };
       }
 
-      log.error("No html_url in gist response", { provider: "gist", apiMessage: data.message ?? "unknown error" });
+      const apiMessage = typeof data.message === "string" ? data.message : "unknown error";
+      log.error("No html_url in gist response", { provider: "gist", apiMessage });
       return null;
     } catch (err) {
       log.error("Failed to create gist", { provider: "gist", error: err });

@@ -144,8 +144,8 @@ describe("slack.ts — new thread always opens cwd picker", () => {
 
     const pick = getPendingCwdPick(client.posted[0].ts);
     assert.ok(pick);
-    assert.equal(pick!.currentDir, homedir());
-    assert.equal(pick!.prompt, "do something");
+    assert.equal(pick.currentDir, homedir());
+    assert.equal(pick.prompt, "do something");
 
     removePendingCwdPick(client.posted[0].ts);
   });
@@ -186,8 +186,8 @@ describe("slack.ts cwd picker select handler", () => {
 
     const session = sessions.get("T1");
     assert.ok(session);
-    assert.equal(session!.cwd, selectedCwd);
-    assert.equal(session!.enqueue.mock.calls.length, 1);
+    assert.equal(session.cwd, selectedCwd);
+    assert.equal(session.enqueue.mock.calls.length, 1);
   });
 
   it("ignores select if no pending pick exists", async () => {

@@ -38,7 +38,7 @@ export function loadProjects(workspaceDirs: string[], configPath = DEFAULT_CONFI
 
   try {
     if (existsSync(expandedConfigPath)) {
-      config = JSON.parse(readFileSync(expandedConfigPath, "utf-8"));
+      config = JSON.parse(readFileSync(expandedConfigPath, "utf-8")) as Record<string, unknown>;
     }
   } catch (err) {
     log.error("Failed to read config file", { path: expandedConfigPath, error: err });

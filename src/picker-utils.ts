@@ -6,9 +6,6 @@ import type { KnownBlock, Block, Button, SectionBlock, ActionsBlock } from "@sla
 /** Slack Block Kit block. */
 export type SlackBlock = KnownBlock | Block;
 
-/** Slack button element. */
-export type SlackButton = Button;
-
 /* ── Block builders ─────────────────────────────────────────────── */
 
 /** Build a section block with mrkdwn text. */

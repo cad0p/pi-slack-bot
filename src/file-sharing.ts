@@ -36,10 +36,10 @@ const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 export const MAX_VISION_BYTES = 5 * 1024 * 1024;
 
 /** Max number of images to send as vision content per message. */
-export const MAX_IMAGES_PER_MESSAGE = 10;
+const MAX_IMAGES_PER_MESSAGE = 10;
 
 /** Mimetypes we'll send as vision content. */
-export const IMAGE_MIMETYPES = new Set([
+const IMAGE_MIMETYPES = new Set([
   "image/png",
   "image/jpeg",
   "image/gif",

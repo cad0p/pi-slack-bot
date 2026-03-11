@@ -345,7 +345,7 @@ export class StreamingUpdater {
       // the last one is "current".
       const used = allMessages.slice(0, chunks.length);
       state.postedMessageTs = used.slice(0, -1);
-      state.currentMessageTs = used[used.length - 1];
+      state.currentMessageTs = used[used.length - 1] ?? state.currentMessageTs;
     } catch (err: unknown) {
       const reduced = Math.floor(limit * 0.6);
       if (this._isMsgTooLong(err) && reduced >= 100) {

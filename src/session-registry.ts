@@ -51,7 +51,7 @@ export class SessionRegistry {
   async load(): Promise<SessionEntry[]> {
     try {
       const raw = await fs.readFile(this._filePath, "utf-8");
-      const data: RegistryFile = JSON.parse(raw);
+      const data = JSON.parse(raw) as RegistryFile;
 
       if (!Array.isArray(data?.sessions)) return [];
 

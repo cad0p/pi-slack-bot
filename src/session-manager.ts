@@ -43,6 +43,7 @@ export class BotSessionManager {
   constructor(
     private _config: Config,
     private _client: WebClient,
+    // eslint-disable-next-line @typescript-eslint/unbound-method
     private _factory: SessionFactory = ThreadSession.create,
     registry?: SessionRegistry,
   ) {

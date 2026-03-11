@@ -50,7 +50,7 @@ export function getPendingPick(messageTs: string): PendingPick | undefined {
 }
 
 /** Remove a pending pick (called after selection or timeout). */
-export function removePendingPick(messageTs: string): void {
+function removePendingPick(messageTs: string): void {
   const p = pending.get(messageTs);
   if (p) {
     clearTimeout(p.timer);

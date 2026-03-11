@@ -227,8 +227,8 @@ describe("postCwdPicker", () => {
     // Pending pick should be registered
     const pick = getPendingCwdPick(msg.ts);
     assert.ok(pick);
-    assert.equal(pick!.prompt, "hello");
-    assert.equal(pick!.currentDir, tmpBase);
+    assert.equal(pick.prompt, "hello");
+    assert.equal(pick.currentDir, tmpBase);
 
     // Clean up
     removePendingCwdPick(msg.ts);

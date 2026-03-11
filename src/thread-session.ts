@@ -408,7 +408,7 @@ export class ThreadSession {
       // For extension commands that are "handled" immediately (like /ralph),
       // prompt() returns before the agent turn starts. Wait for the first turn to
       // complete, but don't block forever if no turn was started (pure commands).
-      if (this._turnCompletePromise) {
+      if (this._turnCompletePromise !== null) {
         await Promise.race([
           this._turnCompletePromise,
           new Promise<void>((resolve) => setTimeout(resolve, 500)),
@@ -433,7 +433,7 @@ export class ThreadSession {
           this._turnCompletePromise = new Promise<void>((r) => {
             this._turnCompleteResolve = r;
           });
-          this._turnCompletePromise.then(resolve);
+          void this._turnCompletePromise.then(resolve);
         });
       }
     } catch (err) {
@@ -521,7 +521,7 @@ export class ThreadSession {
    */
   private _checkContextWarning(): void {
     const usage = this.getContextUsage();
-    if (!usage || usage.percent === null) return;
+    if (usage?.percent === null || usage?.percent === undefined) return;
 
     const threshold = getContextWarningThreshold(usage.percent, this._lastContextWarningThreshold);
     if (threshold !== null) {
