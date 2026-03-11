@@ -3,7 +3,7 @@ import type { Config } from "./config.js";
 import { BotSessionManager, SessionLimitError } from "./session-manager.js";
 import { loadProjects } from "./parser.js";
 import { parseCommand, dispatchCommand } from "./commands.js";
-import { handleFileSelect, handleFileNav, handleFilePickCancel, getPendingPick } from "./file-picker.js";
+import { handleFileSelect, handleFileNav, handleFilePickCancel } from "./file-picker.js";
 import {
   handleRalphPresetSelect,
   handlePromptSelect,
@@ -25,9 +25,6 @@ import {
   type PendingCwdPick,
 } from "./cwd-picker.js";
 import { handleReaction, REACTION_MAP } from "./reactions.js";
-import { createLogger } from "./logger.js";
-
-const log = createLogger("slack");
 
 export interface SlackApp {
   app: App;

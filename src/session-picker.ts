@@ -330,7 +330,7 @@ export async function handleResumeSessionSelect(
     }
 
     // Resume the selected session file — the agent will have full history
-    const session = await pending.sessionManager.getOrCreate({
+    await pending.sessionManager.getOrCreate({
       threadTs: pending.threadTs,
       channelId: pending.channelId,
       cwd,

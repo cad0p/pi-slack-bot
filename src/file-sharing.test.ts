@@ -1,6 +1,6 @@
 import { describe, it, beforeAll, afterAll, vi } from "vitest";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "fs";
+import { mkdirSync, writeFileSync, existsSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import {
@@ -11,10 +11,8 @@ import {
   isImageFile,
   INBOUND_DIR,
   MAX_VISION_BYTES,
-  MAX_IMAGES_PER_MESSAGE,
   type SlackFile,
   type DownloadedFile,
-  type ShareFileContext,
 } from "./file-sharing.js";
 
 /* ------------------------------------------------------------------ */
@@ -207,12 +205,6 @@ describe("createShareFileTool", () => {
     // Create a mock stat that returns a large file
     const filePath = join(TEST_DIR, "big-file.txt");
     writeFileSync(filePath, "x"); // actual file is small
-
-    const tool = createShareFileTool(TEST_DIR, () => ({
-      client: {} as any,
-      channelId: "C1",
-      threadTs: "t1",
-    }));
 
     // This file is actually small, so it won't trigger the limit.
     // Just verify the tool handles a real small file correctly.

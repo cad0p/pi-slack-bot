@@ -7,7 +7,7 @@
  * request is cancelled / times out).
  */
 import { readdirSync, statSync } from "fs";
-import { resolve, join, dirname, basename } from "path";
+import { resolve, join, dirname } from "path";
 import { Type, type Static } from "@sinclair/typebox";
 import type { WebClient } from "@slack/web-api";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
