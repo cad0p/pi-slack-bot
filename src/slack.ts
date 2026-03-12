@@ -200,7 +200,7 @@ export function createApp(config: Config): SlackApp {
     const session = sessionManager.get(threadTs);
     if (!session) return;
 
-    const handled = await handleReaction(emoji, session, client, channel, threadTs);
+    const handled = await handleReaction(emoji, session, client, channel, threadTs, messageTs);
     if (handled) {
       // Remove the reaction to indicate it was processed
       try {

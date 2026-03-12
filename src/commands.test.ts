@@ -50,6 +50,19 @@ function makeCtx(overrides: Partial<CommandContext> = {}): CommandContext {
         posted.push(msg);
         return { ok: true };
       }),
+      getPermalink: vi.fn(async () => ({ permalink: "https://slack.com/archives/C1/p123" })),
+    },
+    auth: {
+      test: vi.fn(async () => ({ user_id: "BOT123" })),
+    },
+    conversations: {
+      replies: vi.fn(async () => ({
+        messages: [
+          { ts: "1000", user: "USER1", text: "hello" },
+          { ts: "1001", user: "BOT123", text: "Here is my response to your question" },
+          { ts: "1002", user: "USER1", text: "!pin" },
+        ],
+      })),
     },
   } as any;
 
@@ -75,6 +88,7 @@ function getPosted(ctx: CommandContext): string[] {
 }
 
 function makeSession(overrides: Record<string, any> = {}) {
+  const _pins: any[] = [];
   return {
     cwd: "/workspace/project",
     lastActivity: new Date("2026-03-04T00:00:00Z"),
@@ -90,6 +104,8 @@ function makeSession(overrides: Record<string, any> = {}) {
     prompt: vi.fn(async () => {}),
     getContextUsage: vi.fn(() => undefined),
     compact: vi.fn(async () => ({ summary: "compacted", firstKeptEntryId: "1", tokensBefore: 180000 })),
+    pins: _pins,
+    addPin: vi.fn((pin: any) => _pins.push(pin)),
     ...overrides,
   } as any;
 }
@@ -484,5 +500,105 @@ describe("!help includes new commands", () => {
     const msg = getPosted(ctx)[0];
     assert.ok(msg.includes("!compact"), "should include !compact");
     assert.ok(msg.includes("!context"), "should include !context");
+  });
+
+  it("lists pin commands", async () => {
+    const ctx = makeCtx();
+    await dispatchCommand("help", "", ctx);
+    const msg = getPosted(ctx)[0];
+    assert.ok(msg.includes("!pin"), "should include !pin");
+    assert.ok(msg.includes("!pins"), "should include !pins");
+  });
+});
+
+// ── Pin commands ─────────────────────────────────────────────────
+
+describe("!pin", () => {
+  it("pins the bot's most recent message", async () => {
+    const session = makeSession();
+    const ctx = makeCtx({ session });
+    await dispatchCommand("pin", "", ctx);
+    const msgs = getPosted(ctx);
+    assert.equal(msgs.length, 1);
+    assert.ok(msgs[0].includes("📌 Pinned"));
+    assert.ok(msgs[0].includes("Here is my response to your question"));
+    assert.equal(session.addPin.mock.calls.length, 1);
+    const pin = session.addPin.mock.calls[0][0];
+    assert.equal(pin.preview, "Here is my response to your question");
+    assert.equal(pin.permalink, "https://slack.com/archives/C1/p123");
+    assert.ok(pin.timestamp);
+  });
+
+  it("truncates long messages to 150 chars", async () => {
+    const longText = "b".repeat(200);
+    const session = makeSession();
+    const ctx = makeCtx({ session });
+    // Override conversations.replies to return a long bot message
+    (ctx.client as any).conversations.replies = vi.fn(async () => ({
+      messages: [{ ts: "1001", user: "BOT123", text: longText }],
+    }));
+    await dispatchCommand("pin", "", ctx);
+    const pin = session.addPin.mock.calls[0][0];
+    assert.equal(pin.preview.length, 151); // 150 + "…"
+    assert.ok(pin.preview.endsWith("…"));
+  });
+
+  it("reports when no bot message found", async () => {
+    const session = makeSession();
+    const ctx = makeCtx({ session });
+    // Only user messages, no bot messages
+    (ctx.client as any).conversations.replies = vi.fn(async () => ({
+      messages: [{ ts: "1000", user: "USER1", text: "hello" }],
+    }));
+    await dispatchCommand("pin", "", ctx);
+    assert.ok(getPosted(ctx)[0].includes("No bot message found"));
+    assert.equal(session.addPin.mock.calls.length, 0);
+  });
+
+  it("handles API errors gracefully", async () => {
+    const session = makeSession();
+    const ctx = makeCtx({ session });
+    (ctx.client as any).auth.test = vi.fn(async () => { throw new Error("auth_failed"); });
+    await dispatchCommand("pin", "", ctx);
+    assert.ok(getPosted(ctx)[0].includes("Failed to pin"));
+    assert.ok(getPosted(ctx)[0].includes("auth_failed"));
+  });
+
+  it("replies no active session when none exists", async () => {
+    const ctx = makeCtx();
+    await dispatchCommand("pin", "", ctx);
+    assert.ok(getPosted(ctx)[0].includes("No active session"));
+  });
+});
+
+describe("!pins", () => {
+  it("lists pinned messages", async () => {
+    const session = makeSession({
+      pins: [
+        { timestamp: "2026-03-12T20:00:00.000Z", preview: "First pinned message", permalink: "https://slack.com/p1" },
+        { timestamp: "2026-03-12T20:05:00.000Z", preview: "Second pinned message", permalink: "https://slack.com/p2" },
+      ],
+    });
+    const ctx = makeCtx({ session });
+    await dispatchCommand("pins", "", ctx);
+    const msg = getPosted(ctx)[0];
+    assert.ok(msg.includes("📌 Pinned messages (2)"));
+    assert.ok(msg.includes("First pinned message"));
+    assert.ok(msg.includes("Second pinned message"));
+    assert.ok(msg.includes("https://slack.com/p1"));
+    assert.ok(msg.includes("https://slack.com/p2"));
+  });
+
+  it("reports no pins when empty", async () => {
+    const session = makeSession();
+    const ctx = makeCtx({ session });
+    await dispatchCommand("pins", "", ctx);
+    assert.ok(getPosted(ctx)[0].includes("No pinned messages"));
+  });
+
+  it("replies no active session when none exists", async () => {
+    const ctx = makeCtx();
+    await dispatchCommand("pins", "", ctx);
+    assert.ok(getPosted(ctx)[0].includes("No active session"));
   });
 });

@@ -7,6 +7,7 @@
  */
 import type { WebClient } from "@slack/web-api";
 import type { ThreadSession } from "./thread-session.js";
+import type { Pin } from "./thread-session.js";
 import { cancelSession, showDiff, compactSession } from "./session-actions.js";
 import { createLogger } from "./logger.js";
 
@@ -18,11 +19,13 @@ export const REACTION_MAP: Record<string, string> = {
   arrows_counterclockwise: "retry",
   clipboard: "diff",
   clamp: "compact",
+  pushpin: "pin",
 };
 
 /**
  * Handle a reaction on a message in a bot thread.
  *
+ * @param messageTs - The ts of the specific message that was reacted to.
  * @returns true if the reaction was handled, false if the emoji is not mapped.
  */
 export async function handleReaction(
@@ -31,6 +34,7 @@ export async function handleReaction(
   client: WebClient,
   channel: string,
   threadTs: string,
+  messageTs: string,
 ): Promise<boolean> {
   const action = REACTION_MAP[emoji];
   if (!action) return false;
@@ -64,6 +68,41 @@ export async function handleReaction(
     case "compact":
       await compactSession(session, reply);
       break;
+
+    case "pin": {
+      try {
+        // Fetch the reacted message to get its content
+        const replies = await client.conversations.replies({
+          channel,
+          ts: threadTs,
+          limit: 200,
+          inclusive: true,
+        });
+        const msg = (replies.messages ?? []).find((m) => m.ts === messageTs);
+        if (!msg) {
+          await reply("Couldn't find the message to pin.");
+          return true;
+        }
+
+        const permalinkResult = await client.chat.getPermalink({
+          channel,
+          message_ts: messageTs,
+        });
+
+        const text = msg.text ?? "";
+        const preview = text.length > 150 ? text.slice(0, 150) + "…" : text;
+        const pin: Pin = {
+          timestamp: new Date().toISOString(),
+          preview,
+          permalink: permalinkResult.permalink ?? "",
+        };
+        session.addPin(pin);
+        await reply(`📌 Pinned: "${preview}"`);
+      } catch (err) {
+        await reply(`❌ Failed to pin: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      break;
+    }
   }
 
   return true;

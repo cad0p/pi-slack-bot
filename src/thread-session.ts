@@ -19,6 +19,15 @@ import type { ToolCallRecord } from "./formatter.js";
 
 const log = createLogger("thread-session");
 
+export interface Pin {
+  /** ISO timestamp of when the message was pinned. */
+  timestamp: string;
+  /** First 150 characters of the message (with "…" if truncated). */
+  preview: string;
+  /** Slack permalink to the pinned message. */
+  permalink: string;
+}
+
 export interface ThreadSessionCreateParams {
   threadTs: string;
   channelId: string;
@@ -42,6 +51,7 @@ export class ThreadSession {
   private _client: WebClient;
   private _updater: StreamingUpdater;
   private _pasteProvider: PasteProvider;
+  private _pins: Pin[] = [];
   private _tasks: Array<() => Promise<void>> = [];
   private _processing = false;
 
@@ -576,5 +586,15 @@ export class ThreadSession {
   /** The last user prompt sent to the agent (for retry). */
   get lastUserPrompt(): string | null {
     return this._lastUserPrompt;
+  }
+
+  /** Add a pinned message to this session. */
+  addPin(pin: Pin): void {
+    this._pins.push(pin);
+  }
+
+  /** All pinned messages in this session. */
+  get pins(): ReadonlyArray<Pin> {
+    return this._pins;
   }
 }

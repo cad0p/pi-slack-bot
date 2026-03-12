@@ -2,6 +2,7 @@ import { resolve } from "path";
 import { existsSync, statSync } from "fs";
 import type { WebClient } from "@slack/web-api";
 import type { ThreadSession } from "./thread-session.js";
+import type { Pin } from "./thread-session.js";
 import type { BotSessionManager, ThreadSessionInfo } from "./session-manager.js";
 import type { ThinkingLevel } from "./config.js";
 import { postRalphPicker, postPromptPicker } from "./command-picker.js";
@@ -45,6 +46,8 @@ const handlers: Record<string, CommandHandler> = {
       "`!diff` — Show git diff of uncommitted changes",
       "`!compact` — Compact conversation to free context space",
       "`!context` — Show context window usage",
+      "`!pin` — Pin the bot's last message in this thread",
+      "`!pins` — List all pinned messages in this session",
       "`!restart` — Restart the bot process (sessions auto-restore)",
       "`!resume` — Browse and resume a local pi TUI session",
       "`!to-tui` — Get a command to open this Slack session in your terminal",
@@ -265,6 +268,64 @@ const handlers: Record<string, CommandHandler> = {
       "Use `!compact` to free space or `!new` for a fresh session.",
     ];
     await reply(ctx, lines.join("\n"));
+  },
+
+  async pin(ctx) {
+    if (!ctx.session) {
+      await reply(ctx, "No active session.");
+      return;
+    }
+    try {
+      // Get bot's own user ID
+      const authResult = await ctx.client.auth.test();
+      const botUserId = authResult.user_id;
+
+      // Fetch thread messages and find the most recent bot message
+      const result = await ctx.client.conversations.replies({
+        channel: ctx.channel,
+        ts: ctx.threadTs,
+        limit: 50,
+      });
+      const messages = result.messages ?? [];
+      const botMsg = [...messages].reverse().find((m) => m.user === botUserId);
+      if (!botMsg || !botMsg.ts) {
+        await reply(ctx, "No bot message found to pin.");
+        return;
+      }
+
+      const permalinkResult = await ctx.client.chat.getPermalink({
+        channel: ctx.channel,
+        message_ts: botMsg.ts,
+      });
+
+      const text = botMsg.text ?? "";
+      const preview = text.length > 150 ? text.slice(0, 150) + "…" : text;
+      const pin: Pin = {
+        timestamp: new Date().toISOString(),
+        preview,
+        permalink: permalinkResult.permalink ?? "",
+      };
+      ctx.session.addPin(pin);
+      await reply(ctx, `📌 Pinned: "${preview}"`);
+    } catch (err) {
+      await reply(ctx, `❌ Failed to pin: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+
+  async pins(ctx) {
+    if (!ctx.session) {
+      await reply(ctx, "No active session.");
+      return;
+    }
+    const pins = ctx.session.pins;
+    if (pins.length === 0) {
+      await reply(ctx, "No pinned messages in this session.");
+      return;
+    }
+    const lines = pins.map((p, i) =>
+      `${i + 1}. ${p.preview}\n   <${p.permalink}|View message> — ${new Date(p.timestamp).toLocaleTimeString()}`
+    );
+    await reply(ctx, `*📌 Pinned messages (${pins.length}):*\n${lines.join("\n")}`);
   },
 
   async prompt(ctx, args) {
