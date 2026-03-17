@@ -47,3 +47,35 @@ export function chunk<T>(arr: T[], size: number): T[][] {
 
 /** Maximum blocks Slack allows per message. */
 export const MAX_SLACK_BLOCKS = 50;
+
+/** Maximum characters allowed in a section block's text field. */
+export const MAX_SECTION_TEXT = 3000;
+
+/**
+ * Build one or more section blocks from text that may exceed Slack's
+ * 3000-char limit. Splits at newline boundaries to stay under the limit.
+ */
+export function safeSections(text: string): SectionBlock[] {
+  if (text.length <= MAX_SECTION_TEXT) return [section(text)];
+
+  const lines = text.split("\n");
+  const blocks: SectionBlock[] = [];
+  let buf = "";
+
+  for (const line of lines) {
+    const candidate = buf ? `${buf}\n${line}` : line;
+    if (candidate.length > MAX_SECTION_TEXT && buf) {
+      blocks.push(section(buf));
+      buf = line.length > MAX_SECTION_TEXT ? line.slice(0, MAX_SECTION_TEXT - 1) + "…" : line;
+    } else if (candidate.length > MAX_SECTION_TEXT) {
+      // Single line exceeds limit — hard truncate
+      blocks.push(section(candidate.slice(0, MAX_SECTION_TEXT - 1) + "…"));
+      buf = "";
+    } else {
+      buf = candidate;
+    }
+  }
+
+  if (buf) blocks.push(section(buf));
+  return blocks;
+}

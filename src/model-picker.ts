@@ -6,7 +6,7 @@
  */
 import type { WebClient } from "@slack/web-api";
 import type { ThreadSession } from "./thread-session.js";
-import { section, actions, button, chunk, MAX_SLACK_BLOCKS, type SlackBlock } from "./picker-utils.js";
+import { section, safeSections, actions, button, chunk, MAX_SLACK_BLOCKS, type SlackBlock } from "./picker-utils.js";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -153,7 +153,7 @@ export async function postModelPicker(
       const isCurrent = m.id === currentModelId && m.provider === session.model?.provider;
       return modelDescription(m, isCurrent);
     }).join("\n");
-    blocks.push(section(descLines));
+    blocks.push(...safeSections(descLines));
   }
 
   // Cap at Slack's block limit

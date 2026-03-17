@@ -13,7 +13,7 @@ import type { WebClient } from "@slack/web-api";
 import type { ThreadSession } from "./thread-session.js";
 import type { BotSessionManager } from "./session-manager.js";
 import { encodeCwd } from "./session-path.js";
-import { section, actions, button, type SlackBlock } from "./picker-utils.js";
+import { section, safeSections, actions, button, type SlackBlock } from "./picker-utils.js";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -146,7 +146,7 @@ export async function postProjectSessionPicker(
   const descLines = projects.slice(0, 15).map((p) =>
     `\`${p.cwd}\` — ${p.count} session${p.count > 1 ? "s" : ""}, last ${relativeTime(new Date(p.lastModified))}`
   ).join("\n");
-  blocks.push(section(descLines));
+  blocks.push(...safeSections(descLines));
 
   if (blocks.length > 50) blocks.length = 50;
 
@@ -212,7 +212,7 @@ async function postSessionList(
     const msg = truncate(s.firstMessage || "—", 80);
     return `${name} — ${msg} (${s.messageCount} msgs, ${relativeTime(s.modified)})`;
   }).join("\n");
-  blocks.push(section(descLines));
+  blocks.push(...safeSections(descLines));
 
   if (blocks.length > 50) blocks.length = 50;
 

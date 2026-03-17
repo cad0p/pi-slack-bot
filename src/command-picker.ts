@@ -12,7 +12,7 @@ import { join } from "path";
 import { homedir } from "os";
 import type { WebClient } from "@slack/web-api";
 import type { ThreadSession } from "./thread-session.js";
-import { section, actions, button, type SlackBlock } from "./picker-utils.js";
+import { section, safeSections, actions, button, type SlackBlock } from "./picker-utils.js";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -145,7 +145,7 @@ export async function postRalphPicker(
 
   // Add descriptions as context
   const descLines = presets.map((p) => `*${p.name}:* ${p.description}`).join("\n");
-  blocks.push(section(descLines));
+  blocks.push(...safeSections(descLines));
 
   const result = await client.chat.postMessage({
     channel,
@@ -244,7 +244,7 @@ export async function postPromptPicker(
     .map((t) => `\`/${t.name}\` — ${t.description || "_no description_"}`)
     .join("\n");
   if (descLines) {
-    blocks.push(section(descLines));
+    blocks.push(...safeSections(descLines));
   }
 
   // Cap at 50 blocks
