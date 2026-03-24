@@ -13,6 +13,8 @@ import type { WebClient } from "@slack/web-api";
 import type { Config } from "./config.js";
 import { extractSignals, type MessageContext } from "./listener-signals.js";
 import { processSignal } from "./listener-actions.js";
+import { classifyIntent } from "./listener-intent.js";
+import { processIntent } from "./listener-intent-actions.js";
 import { BriefingStore } from "./listener-store.js";
 import { createLogger } from "./logger.js";
 import { existsSync, readFileSync } from "fs";
@@ -146,19 +148,8 @@ export async function installListener(
     const text = event.text ?? "";
     if (!text.trim()) return;
 
-    // Extract signals from the message
-    const signals = extractSignals(text);
-    if (signals.length === 0) return;
-
     const channelName = await resolveChannelName(client, channel);
     const threadTs = ("thread_ts" in event ? event.thread_ts : undefined) ?? event.ts;
-
-    log.info("Listener detected signals", {
-      channel: channelName ?? channel,
-      user,
-      signalCount: signals.length,
-      types: [...new Set(signals.map((s) => s.type))],
-    });
 
     const ctx: MessageContext = {
       channel,
@@ -169,10 +160,47 @@ export async function installListener(
       ts: event.ts,
     };
 
-    // Process all signals in parallel (fire-and-forget, errors are logged)
-    await Promise.allSettled(
-      signals.map((signal) => processSignal(signal, ctx, store)),
-    );
+    // Extract structured signals from the message (CRs, SIM tickets, URLs)
+    const signals = extractSignals(text);
+
+    if (signals.length > 0) {
+      log.info("Listener detected signals", {
+        channel: channelName ?? channel,
+        user,
+        signalCount: signals.length,
+        types: [...new Set(signals.map((s) => s.type))],
+      });
+
+      // Process structured signals in parallel
+      await Promise.allSettled(
+        signals.map((signal) => processSignal(signal, ctx, store)),
+      );
+    }
+
+    // For messages without structured signals (or in addition to them for DMs),
+    // run intent classification to detect questions, requests, etc.
+    // Only classify DMs and messages in monitored channels that look conversational.
+    if (signals.length === 0 && (isDM || isMonitored)) {
+      // Resolve user name for better classification context
+      let userName: string | undefined;
+      try {
+        const userInfo = await client.users.info({ user: user! });
+        userName = userInfo.user?.real_name ?? userInfo.user?.name;
+      } catch {
+        // Non-critical — classification works without it
+      }
+
+      const intent = await classifyIntent(text, { channelName, userName });
+      if (intent) {
+        log.info("Listener classified intent", {
+          channel: channelName ?? channel,
+          user: userName ?? user,
+          type: intent.type,
+          topic: intent.topic,
+        });
+        await processIntent(intent, ctx, store);
+      }
+    }
   });
 
   log.info("Passive listener installed");
