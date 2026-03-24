@@ -5,6 +5,7 @@ import type { ThreadSession } from "./thread-session.js";
 import type { Pin, PinStore } from "./pin-store.js";
 import type { BotSessionManager, ThreadSessionInfo } from "./session-manager.js";
 import type { ThinkingLevel } from "./config.js";
+import type { BriefingStore } from "./listener-store.js";
 import { postPromptPicker } from "./command-picker.js";
 import { postModelPicker } from "./model-picker.js";
 import { postProjectSessionPicker, postToTuiCommand } from "./session-picker.js";
@@ -20,6 +21,7 @@ export interface CommandContext {
   sessionManager: BotSessionManager;
   session: ThreadSession | undefined;
   pinStore: PinStore;
+  briefingStore?: BriefingStore;
 }
 
 type CommandHandler = (ctx: CommandContext, args: string) => Promise<void>;
@@ -55,6 +57,8 @@ const handlers: Record<string, CommandHandler> = {
       "`!to-tui` — Get a command to open this Slack session in your terminal",
       "`!plan <idea>` — Start a PDD planning session",
       "`!prompt [name]` — Run a prompt template (shows picker if no args)",
+      "`!briefing [days]` — Show prepared briefings from passive listener",
+      "`!listen [status]` — Listener status and configuration help",
       "",
       "*File sharing:*",
       "• Upload files to a thread — they're saved to `.slack-files/` in the session cwd",
@@ -317,6 +321,81 @@ const handlers: Record<string, CommandHandler> = {
       // No args — show template picker buttons
       await postPromptPicker(ctx.client, ctx.channel, ctx.threadTs, ctx.session);
     }
+  },
+
+  async briefing(ctx, args) {
+    if (!ctx.briefingStore) {
+      await reply(ctx, "❌ Listener is not enabled. Configure `~/.pi-slack-bot/listener.json` first.");
+      return;
+    }
+
+    const days = parseInt(args.trim(), 10) || 1;
+    const entries = ctx.briefingStore.getRecent(days);
+
+    if (entries.length === 0) {
+      await reply(ctx, `No briefings in the last ${days} day(s). The listener monitors configured channels and prepares context when it detects CRs, SIM tickets, etc.`);
+      return;
+    }
+
+    const lines = [`*📋 Briefings (${entries.length} items, last ${days} day(s)):*`, ""];
+    for (const entry of entries.slice(0, 20)) {
+      const time = new Date(entry.timestamp).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+      const channel = entry.channelName ? `#${entry.channelName}` : entry.channel;
+      lines.push(`*${time}* — ${channel}`);
+      lines.push(`  ${entry.summary}`);
+      if (entry.detail.length > 200) {
+        lines.push(`  _${entry.detail.slice(0, 200)}…_`);
+      } else {
+        lines.push(`  _${entry.detail}_`);
+      }
+      lines.push("");
+    }
+
+    if (entries.length > 20) {
+      lines.push(`_…and ${entries.length - 20} more_`);
+    }
+
+    await reply(ctx, lines.join("\n"));
+  },
+
+  async listen(ctx, args) {
+    const sub = args.trim().toLowerCase();
+
+    if (sub === "status") {
+      if (!ctx.briefingStore) {
+        await reply(ctx, "Listener: *disabled*\nConfigure `~/.pi-slack-bot/listener.json` to enable.");
+        return;
+      }
+      const count = ctx.briefingStore.getTodayCount();
+      const dates = ctx.briefingStore.listDates();
+      await reply(ctx, [
+        "Listener: *enabled* ✅",
+        `Today's briefings: ${count}`,
+        `Days with data: ${dates.length}`,
+        "",
+        "Use `!briefing` to see prepared context.",
+        "Use `!briefing 3` for last 3 days.",
+      ].join("\n"));
+      return;
+    }
+
+    await reply(ctx, [
+      "*Passive Listener Commands:*",
+      "`!listen status` — Show listener status",
+      "`!briefing` — Show today's prepared briefings",
+      "`!briefing <days>` — Show briefings from last N days",
+      "",
+      "*Configuration:*",
+      "Edit `~/.pi-slack-bot/listener.json`:",
+      "```",
+      JSON.stringify({
+        enabled: true,
+        channels: ["C01234ABCDE"],
+      }, null, 2),
+      "```",
+      "Channel IDs can be found in Slack channel details.",
+      "DMs from others are always monitored when enabled.",
+    ].join("\n"));
   },
 };
 

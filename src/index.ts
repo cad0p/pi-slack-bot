@@ -21,7 +21,7 @@ log.info("pi-slack-bot starting", {
   workspaceDirs: config.workspaceDirs,
 });
 
-const slackApp = createApp(config);
+const slackApp = await createApp(config);
 
 await slackApp.app.start();
 log.info("Bot running");
