@@ -25,6 +25,8 @@ export interface ListenerConfig {
   channels: string[];
   /** Whether the listener is enabled */
   enabled: boolean;
+  /** Static channel name mappings from config (avoids API calls) */
+  channelNames: Record<string, string>;
 }
 
 /**
@@ -48,17 +50,18 @@ export function loadListenerConfig(): ListenerConfig {
   try {
     if (!existsSync(configPath)) {
       log.info("No listener config found, listener disabled", { path: configPath });
-      return { channels: [], enabled: false };
+      return { channels: [], enabled: false, channelNames: {} };
     }
 
     const raw = JSON.parse(readFileSync(configPath, "utf-8"));
     return {
       enabled: raw.enabled ?? false,
       channels: raw.channels ?? [],
+      channelNames: raw.channelNames ?? {},
     };
   } catch (err) {
     log.error("Failed to load listener config", { error: err });
-    return { channels: [], enabled: false };
+    return { channels: [], enabled: false, channelNames: {} };
   }
 }
 
@@ -107,6 +110,11 @@ export async function installListener(
     channelCount: listenerConfig.channels.length,
     channels: listenerConfig.channels,
   });
+
+  // Seed the channel name cache from config to avoid API lookups
+  for (const [id, name] of Object.entries(listenerConfig.channelNames)) {
+    channelNameCache.set(id, name);
+  }
 
   const monitoredChannels = new Set(listenerConfig.channels);
 
