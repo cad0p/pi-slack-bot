@@ -16,6 +16,7 @@ import { processSignal } from "./listener-actions.js";
 import { classifyIntent } from "./listener-intent.js";
 import { processIntent } from "./listener-intent-actions.js";
 import { BriefingStore } from "./listener-store.js";
+import { createDMPoller, type DMPoller } from "./listener-dm-poller.js";
 import { createLogger } from "./logger.js";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
@@ -86,6 +87,7 @@ async function resolveChannelName(client: WebClient, channelId: string): Promise
 export interface Listener {
   store: BriefingStore;
   listenerConfig: ListenerConfig;
+  dmPoller?: DMPoller;
 }
 
 /**
@@ -204,5 +206,14 @@ export async function installListener(
   });
 
   log.info("Passive listener installed");
-  return { store, listenerConfig };
+
+  // Start the DM poller — reads the user's personal DMs via MCP
+  const dmPoller = createDMPoller({
+    store,
+    ownerUserId: config.slackUserId,
+    stateDir: join(config.sessionDir, "..", "briefings"),
+  });
+  dmPoller.start();
+
+  return { store, listenerConfig, dmPoller };
 }

@@ -35,6 +35,7 @@ slackApp.sessionManager.restoreAll().then((count) => {
 
 process.on("SIGINT", async () => {
   log.info("Shutting down");
+  slackApp.listener?.dmPoller?.stop();
   await slackApp.sessionManager.disposeAll();
   await slackApp.sessionManager.flushRegistry();
   slackApp.sessionManager.disposeRegistry();
