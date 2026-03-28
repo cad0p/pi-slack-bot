@@ -70,6 +70,7 @@ export class BotSessionManager {
       config: this._config,
       client: this._client,
       sessionDir: this._config.sessionDir,
+      sessionManager: this,
     });
 
     this._sessions.set(params.threadTs, session);

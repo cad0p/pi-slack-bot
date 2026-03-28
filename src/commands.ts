@@ -336,6 +336,8 @@ export function parseCommand(text: string): { name: string; args: string } | nul
   };
 }
 
+// ---------------------------------------------------------------------------
+// Natural-language command interceptor
 /**
  * Dispatch a parsed command. Returns true if handled, false if unknown.
  * Unknown commands are forwarded to the pi session as /command.

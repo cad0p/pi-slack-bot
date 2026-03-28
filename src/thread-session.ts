@@ -8,6 +8,8 @@ import type { Config, ThinkingLevel } from "./config.js";
 import { StreamingUpdater } from "./streaming-updater.js";
 import { createFilePickerTool, type FilePickerContext } from "./file-picker.js";
 import { createShareFileTool, type ShareFileContext } from "./file-sharing.js";
+import { createRestartBotTool, createSetModelTool, createSetThinkingLevelTool } from "./bot-tools.js";
+import type { BotSessionManager } from "./session-manager.js";
 import { encodeCwd } from "./session-path.js";
 import { hasFileModifications, postDiffReview, getHeadRef } from "./diff-reviewer.js";
 import { createPasteProvider, type PasteProvider } from "./paste-provider.js";
@@ -27,6 +29,8 @@ export interface ThreadSessionCreateParams {
   config: Config;
   client: WebClient;
   sessionDir: string;
+  /** Session manager reference for bot-level tools (restart). */
+  sessionManager?: BotSessionManager;
   /** If set, resume from this existing session file instead of creating a new one. */
   resumeSessionPath?: string;
 }
@@ -159,11 +163,23 @@ export class ThreadSession {
     };
     const shareFileTool = createShareFileTool(params.cwd, () => shareFileContext);
 
+    // Bot control tools — let the agent restart, switch models, change thinking
+    // Uses lazy getters since the ThreadSession instance doesn't exist yet.
+    let threadSessionRef: ThreadSession | null = null;
+    const botTools = [];
+
+    if (params.sessionManager) {
+      const sm = params.sessionManager;
+      botTools.push(createRestartBotTool(() => ({ sessionManager: sm })));
+    }
+    botTools.push(createSetModelTool(() => threadSessionRef!));
+    botTools.push(createSetThinkingLevelTool(() => threadSessionRef!));
+
     const { session } = await createAgentSession({
       cwd: params.cwd,
       sessionManager: piSessionManager,
       tools: createCodingTools(params.cwd),
-      customTools: [filePickerTool, shareFileTool],
+      customTools: [filePickerTool, shareFileTool, ...botTools],
       resourceLoader,
     });
 
@@ -210,6 +226,8 @@ export class ThreadSession {
       updater,
       pasteProvider,
     );
+    // Wire up the lazy ref so bot tools can access the ThreadSession
+    threadSessionRef = ts;
     ts._setupPersistentSubscriber();
     return ts;
   }
