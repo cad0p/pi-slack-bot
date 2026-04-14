@@ -3,3 +3,4 @@ dist/
 .env
 *.js.map
 .slack-files/
+package-lock.json
