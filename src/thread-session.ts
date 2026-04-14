@@ -192,6 +192,8 @@ export class ThreadSession {
     if (model) {
       await session.setModel(model);
       session.setThinkingLevel(params.config.thinkingLevel);
+    } else {
+      log.error("Model not found", { provider: params.config.provider, model: params.config.model, availableProviders: [...new Set(allModels.map(m => m.provider))] });
     }
 
     const updater = new StreamingUpdater(params.client, params.config.streamThrottleMs);
@@ -516,6 +518,9 @@ export class ThreadSession {
         this._activeStreamState = null;
         this._beginPromise = null;
         await this._updater.error(state, err instanceof Error ? err : new Error(String(err)));
+      } else {
+        log.error("prompt() failed with no active stream", { threadTs: this.threadTs, error: err instanceof Error ? { message: err.message, stack: err.stack } : err });
+        await this._postToThread(`❌ ${err instanceof Error ? err.message : String(err)}`).catch(() => {});
       }
       // Clean up turn promise
       if (this._turnCompleteResolve) {

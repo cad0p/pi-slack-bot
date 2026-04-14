@@ -25,6 +25,9 @@ import {
 } from "./cwd-picker.js";
 import { handleReaction, REACTION_MAP } from "./reactions.js";
 import { PinStore } from "./pin-store.js";
+import { createLogger } from "./logger.js";
+
+const log = createLogger("slack");
 export interface SlackApp {
   app: App;
   sessionManager: BotSessionManager;
@@ -68,6 +71,15 @@ export function createApp(config: Config): SlackApp {
           channel: pick.channelId,
           thread_ts: pick.threadTs,
           text: "⚠️ Too many active sessions. Try again later.",
+        });
+      } else {
+        log.error("Failed to create session", { threadTs: pick.threadTs, error: err });
+        await pick.client.chat.postMessage({
+          channel: pick.channelId,
+          thread_ts: pick.threadTs,
+          text: `❌ Failed to start session: ${err instanceof Error ? err.message : String(err)}`,
+        }).catch((postErr) => {
+          log.warn("Failed to post session-start failure notification", { threadTs: pick.threadTs, error: postErr });
         });
       }
     }
@@ -251,6 +263,10 @@ export function createApp(config: Config): SlackApp {
   /* ── Session resume picker ──────────────────────────────────────── */
   onButtonAction(/^resume_project_/, handleResumeProjectSelect);
   onButtonAction(/^resume_session_/, handleResumeSessionSelect);
+
+  app.error(async (error) => {
+    log.error("Bolt app error", { error });
+  });
 
   return {
     app,

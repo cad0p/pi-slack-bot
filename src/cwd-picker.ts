@@ -13,6 +13,9 @@ import type { WebClient } from "@slack/web-api";
 import type { Project } from "./parser.js";
 import type { SlackFile } from "./file-sharing.js";
 import { truncLabel, chunk, section, actions, button, MAX_SLACK_BLOCKS, type SlackBlock } from "./picker-utils.js";
+import { createLogger } from "./logger.js";
+
+const log = createLogger("cwd-picker");
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -36,7 +39,7 @@ export interface PendingCwdPick {
   /** Pinned project shortcuts for quick-jump buttons. */
   projects: Project[];
   /** Callback invoked when a directory is selected. */
-  onSelect: (pick: PendingCwdPick, selectedDir: string) => void;
+  onSelect: (pick: PendingCwdPick, selectedDir: string) => void | Promise<void>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -171,7 +174,7 @@ export interface PostCwdPickerParams {
   files: SlackFile[];
   projects: Project[];
   startDir?: string;
-  onSelect: (pick: PendingCwdPick, selectedDir: string) => void;
+  onSelect: (pick: PendingCwdPick, selectedDir: string) => void | Promise<void>;
 }
 
 export async function postCwdPicker(params: PostCwdPickerParams): Promise<void> {
@@ -234,7 +237,11 @@ export async function handleCwdSelect(messageTs: string, selectedDir: string): P
     blocks: [],
   });
 
-  pick.onSelect(pick, selectedDir);
+  try {
+    await pick.onSelect(pick, selectedDir);
+  } catch (err) {
+    log.error("onSelect callback failed", { error: err });
+  }
 }
 
 /**
