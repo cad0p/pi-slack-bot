@@ -381,14 +381,14 @@ export class ThreadSession {
       }
 
       // Auto-compaction events
-      if (event.type === "auto_compaction_start") {
+      if (event.type === "compaction_start" && event.reason !== "manual") {
         this._postToThread("🗜️ Auto-compacting conversation...").catch((err) => {
           log.error("Failed to post auto-compaction start", { threadTs: this.threadTs, error: err });
         });
         return;
       }
 
-      if (event.type === "auto_compaction_end") {
+      if (event.type === "compaction_end" && event.reason !== "manual") {
         const result = event.result;
         if (result) {
           const after = this.getContextUsage();
@@ -584,7 +584,8 @@ export class ThreadSession {
   }
 
   async newSession(): Promise<void> {
-    await this._agentSession.newSession();
+    // newSession() was removed in pi-coding-agent 0.67.x — compact instead
+    await this._agentSession.compact("Start fresh. Summarize the conversation so far briefly.");
     this._lastContextWarningThreshold = 0;
   }
 
