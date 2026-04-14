@@ -4,14 +4,12 @@ import type { WebClient } from "@slack/web-api";
 import type { ThreadSession } from "./thread-session.js";
 import type { Pin, PinStore } from "./pin-store.js";
 import type { BotSessionManager, ThreadSessionInfo } from "./session-manager.js";
-import type { ThinkingLevel } from "./config.js";
+import { type ThinkingLevel, VALID_THINKING_LEVELS } from "./config.js";
 import { postPromptPicker } from "./command-picker.js";
 import { postModelPicker } from "./model-picker.js";
 import { postProjectSessionPicker, postToTuiCommand } from "./session-picker.js";
 import { cancelSession, showDiff, compactSession } from "./session-actions.js";
 import { formatContextUsage, formatContextBar } from "./context-format.js";
-
-const VALID_THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
 export interface CommandContext {
   channel: string;
@@ -336,6 +334,8 @@ export function parseCommand(text: string): { name: string; args: string } | nul
   };
 }
 
+// ---------------------------------------------------------------------------
+// Natural-language command interceptor
 /**
  * Dispatch a parsed command. Returns true if handled, false if unknown.
  * Unknown commands are forwarded to the pi session as /command.
