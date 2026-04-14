@@ -48,7 +48,7 @@ function optionalInt(name: string, defaultVal: number): number {
   return n;
 }
 
-const VALID_THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+export const VALID_THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
 function parseThinkingLevel(val: string): ThinkingLevel {
   if (VALID_THINKING_LEVELS.includes(val as ThinkingLevel)) return val as ThinkingLevel;
