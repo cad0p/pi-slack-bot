@@ -31,7 +31,7 @@
     "image": "https://raw.githubusercontent.com/samfoy/pi-slack-bot/main/assets/preview.jpg"
   },
   "dependencies": {
-    "@mariozechner/pi-coding-agent": "^0.55.4",
+    "@mariozechner/pi-coding-agent": "^0.67.1",
     "@slack/bolt": "^4.6.0",
     "dotenv": "^16.4.7",
     "slackify-markdown": "^5.0.0"
