@@ -33,6 +33,10 @@ slackApp.sessionManager.restoreAll().then((count) => {
   log.error("Failed to restore sessions", { error: err });
 });
 
+process.on("unhandledRejection", (reason) => {
+  log.error("Unhandled promise rejection", { error: reason });
+});
+
 process.on("SIGINT", async () => {
   log.info("Shutting down");
   slackApp.sessionManager.stopReaper();
